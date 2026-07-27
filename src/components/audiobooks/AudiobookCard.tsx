@@ -29,7 +29,15 @@ const getStatusConfig = (audiobook: Audiobook) => {
     return { type: 'available', label: 'In Library', color: 'emerald' };
   }
 
-  const processingStatuses = ['downloading', 'processing', 'downloaded', 'awaiting_import'];
+  // B4: `awaiting_import` is a WAITING state, not active work — a record can sit
+  // there for hours after a failed/stalled import. Showing it as a spinning
+  // "Processing" implies something is running when nothing is. It gets its own
+  // non-animated state, matching StatusBadge which already labels it correctly.
+  if (audiobook.requestStatus === 'awaiting_import') {
+    return { type: 'awaiting_import', label: 'Awaiting Import', color: 'amber' };
+  }
+
+  const processingStatuses = ['downloading', 'processing', 'downloaded'];
   if (audiobook.requestStatus && processingStatuses.includes(audiobook.requestStatus)) {
     return { type: 'processing', label: 'Processing', color: 'amber' };
   }
@@ -114,7 +122,7 @@ export function AudiobookCard({
               transition-all duration-300 ease-out
               ${squareCovers ? 'aspect-square' : 'aspect-[2/3]'}
               ${status?.type === 'available' ? 'ring-2 ring-emerald-400/60 dark:ring-emerald-500/50' : ''}
-              ${status?.type === 'processing' ? 'ring-2 ring-amber-400/60 dark:ring-amber-500/50' : ''}
+              ${status?.type === 'processing' || status?.type === 'awaiting_import' ? 'ring-2 ring-amber-400/60 dark:ring-amber-500/50' : ''}
             `}
           >
             {/* Cover Art */}
@@ -179,7 +187,7 @@ export function AudiobookCard({
                 ) : (
                   <div className={`
                     w-full py-2.5 px-4 rounded-xl font-semibold text-sm text-center backdrop-blur-md
-                    ${status?.type === 'processing' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/25' : ''}
+                    ${status?.type === 'processing' || status?.type === 'awaiting_import' ? 'bg-amber-500 text-white shadow-lg shadow-amber-500/25' : ''}
                     ${status?.type === 'pending' ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/25' : ''}
                     ${status?.type === 'denied' ? 'bg-red-500 text-white shadow-lg shadow-red-500/25' : ''}
                   `}>
@@ -192,6 +200,8 @@ export function AudiobookCard({
                         Processing
                       </span>
                     )}
+                    {/* B4: no spinner — nothing is actively running in this state. */}
+                    {status?.type === 'awaiting_import' && 'Awaiting Import'}
                     {status?.type === 'pending' && 'Requested'}
                     {status?.type === 'denied' && 'Request Denied'}
                   </div>
@@ -206,6 +216,7 @@ export function AudiobookCard({
                 shadow-lg transition-opacity duration-300 group-hover:opacity-0
                 ${status.type === 'available' ? 'bg-emerald-400' : ''}
                 ${status.type === 'processing' ? 'bg-amber-400 animate-pulse' : ''}
+                ${status.type === 'awaiting_import' ? 'bg-amber-400' : ''}
                 ${status.type === 'pending' ? 'bg-blue-400' : ''}
                 ${status.type === 'denied' ? 'bg-red-400' : ''}
               `} />

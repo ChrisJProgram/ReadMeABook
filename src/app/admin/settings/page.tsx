@@ -361,10 +361,16 @@ export default function AdminSettings() {
                 {saving ? 'Saving...' : 'Save Settings'}
               </Button>
               {!currentTabValidation && hasUnsavedChanges && (
-                <p className="text-sm text-gray-500 dark:text-gray-400 self-center">
-                  {activeTab === 'prowlarr'
-                    ? 'Please test the Prowlarr connection before saving'
-                    : 'Please test the connection before saving'}
+                <p
+                  role="status"
+                  className="text-sm text-amber-700 dark:text-amber-400 self-center"
+                >
+                  {/* B2: state WHY Save is disabled and what to do about it.
+                      This now only appears when connection details actually
+                      changed — behaviour-only edits no longer gate Save. */}
+                  {activeTab === 'paths'
+                    ? 'Directories changed — run Test Paths before saving.'
+                    : 'Connection details changed — run Test Connection before saving.'}
                 </p>
               )}
             </div>

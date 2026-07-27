@@ -177,7 +177,37 @@ export const validateAuthSettings = (settings: Settings): { valid: boolean; mess
 };
 
 /**
- * Gets validation status for the current tab
+ * Fields whose change genuinely invalidates a previous connection test.
+ *
+ * B2: every tab used to demand a fresh "Test" before Save became clickable, so
+ * toggling a pure behaviour checkbox (e.g. "Trigger scan after import", "Chapter
+ * merging") left Save greyed out with its reason rendered far below the fold —
+ * users ticked a box, clicked a dead button, and believed it saved. Only the
+ * fields below are actually exercised by a connection/path test; everything else
+ * on these tabs is a local preference that the test never touched.
+ *
+ * The `prowlarr` tab already worked this way; this generalises that precedent.
+ */
+const CONNECTION_FIELDS = {
+  plex: ['url', 'token'] as const,
+  audiobookshelf: ['serverUrl', 'apiToken'] as const,
+  prowlarr: ['url', 'apiKey'] as const,
+  downloadClient: ['type', 'url', 'username', 'password', 'disableSSLVerify'] as const,
+  paths: ['downloadDir', 'mediaDir'] as const,
+};
+
+/** True when any connection-relevant field differs between current and original. */
+const connectionChanged = <T>(
+  current: T,
+  original: T,
+  fields: readonly (keyof T)[]
+): boolean => fields.some((field) => current[field] !== original[field]);
+
+/**
+ * Gets validation status for the current tab.
+ *
+ * Contract: a tab requires a fresh successful test ONLY when its connection
+ * details changed. Behaviour-only edits save immediately.
  */
 export const getTabValidation = (
   activeTab: SettingsTab,
@@ -194,8 +224,28 @@ export const getTabValidation = (
   }
 ): boolean => {
   switch (activeTab) {
-    case 'library':
-      return settings.backendMode === 'plex' ? validated.plex : validated.audiobookshelf;
+    case 'library': {
+      const isPlex = settings.backendMode === 'plex';
+      const tabValidated = isPlex ? validated.plex : validated.audiobookshelf;
+
+      // No baseline to compare against -> fall back to requiring a test.
+      if (!originalSettings) return tabValidated;
+
+      // Switching backend mode entirely always needs a test.
+      if (settings.backendMode !== originalSettings.backendMode) return tabValidated;
+
+      const changed = isPlex
+        ? connectionChanged(settings.plex, originalSettings.plex, CONNECTION_FIELDS.plex)
+        : connectionChanged(
+            settings.audiobookshelf,
+            originalSettings.audiobookshelf,
+            CONNECTION_FIELDS.audiobookshelf
+          );
+
+      // libraryId / triggerScanAfterImport are picked or toggled AFTER a good
+      // connection - they don't invalidate it.
+      return changed ? tabValidated : true;
+    }
     case 'auth':
       // If OIDC is enabled, it must be validated
       // If OIDC is disabled, we don't require validation for it
@@ -205,20 +255,45 @@ export const getTabValidation = (
       }
       // If OIDC is disabled, allow saving without validation
       return true;
-    case 'prowlarr':
+    case 'prowlarr': {
       // Only require validation if URL or API key changed
       // If only indexers/flags changed, allow saving without test
       if (!originalSettings) return validated.prowlarr;
 
-      const prowlarrConnectionChanged =
-        settings.prowlarr.url !== originalSettings.prowlarr.url ||
-        settings.prowlarr.apiKey !== originalSettings.prowlarr.apiKey;
+      const changed = connectionChanged(
+        settings.prowlarr,
+        originalSettings.prowlarr,
+        CONNECTION_FIELDS.prowlarr
+      );
 
-      return prowlarrConnectionChanged ? validated.prowlarr : true;
-    case 'download':
-      return validated.download;
-    case 'paths':
-      return validated.paths;
+      return changed ? validated.prowlarr : true;
+    }
+    case 'download': {
+      if (!originalSettings) return validated.download;
+
+      // Remote path mapping is a translation setting, not part of the client
+      // handshake - the connection test never exercises it.
+      const changed = connectionChanged(
+        settings.downloadClient,
+        originalSettings.downloadClient,
+        CONNECTION_FIELDS.downloadClient
+      );
+
+      return changed ? validated.download : true;
+    }
+    case 'paths': {
+      if (!originalSettings) return validated.paths;
+
+      // Only the directories are probed for existence/writability; templates and
+      // processing toggles are not.
+      const changed = connectionChanged(
+        settings.paths,
+        originalSettings.paths,
+        CONNECTION_FIELDS.paths
+      );
+
+      return changed ? validated.paths : true;
+    }
     case 'ebook':
     case 'bookdate':
     case 'api':

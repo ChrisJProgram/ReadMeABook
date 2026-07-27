@@ -53,7 +53,14 @@ const getStatusInfo = (isAvailable: boolean, requestStatus: string | null, reque
     return { type: 'available', label: 'In Your Library', canRequest: false };
   }
 
-  const processingStatuses = ['downloading', 'processing', 'downloaded', 'awaiting_import'];
+  // B4: `awaiting_import` is a WAITING state, not active work — a record can sit
+  // there for hours after a stalled/failed import, so a spinning "Processing"
+  // misrepresents it. Matches StatusBadge, which already labels it correctly.
+  if (requestStatus === 'awaiting_import') {
+    return { type: 'awaiting_import', label: 'Awaiting Import', canRequest: false };
+  }
+
+  const processingStatuses = ['downloading', 'processing', 'downloaded'];
   if (requestStatus && processingStatuses.includes(requestStatus)) {
     return { type: 'processing', label: 'Processing', canRequest: false };
   }
@@ -423,7 +430,7 @@ export function AudiobookDetailsModal({
                       <span className={`
                         inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium
                         ${status.type === 'available' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' : ''}
-                        ${status.type === 'processing' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' : ''}
+                        ${status.type === 'processing' || status.type === 'awaiting_import' ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' : ''}
                         ${status.type === 'pending' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : ''}
                         ${status.type === 'denied' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : ''}
                       `}>
@@ -436,6 +443,12 @@ export function AudiobookDetailsModal({
                           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        )}
+                        {/* B4: a static clock, not a spinner — this state is waiting, not working. */}
+                        {status.type === 'awaiting_import' && (
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.5 2.5a1 1 0 001.414-1.414L11 9.586V6z" clipRule="evenodd" />
                           </svg>
                         )}
                         {status.label}
@@ -682,7 +695,7 @@ export function AudiobookDetailsModal({
                     disabled
                     className={`
                       w-full py-3 px-4 rounded-xl font-semibold
-                      ${status.type === 'processing' ? 'text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30' : ''}
+                      ${status.type === 'processing' || status.type === 'awaiting_import' ? 'text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30' : ''}
                       ${status.type === 'pending' ? 'text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30' : ''}
                       ${status.type === 'denied' ? 'text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30' : ''}
                     `}
@@ -696,6 +709,8 @@ export function AudiobookDetailsModal({
                         Processing
                       </span>
                     )}
+                    {/* B4: no spinner — nothing is actively running in this state. */}
+                    {status.type === 'awaiting_import' && status.label}
                     {status.type === 'pending' && status.label}
                     {status.type === 'denied' && 'Request Denied'}
                   </button>
