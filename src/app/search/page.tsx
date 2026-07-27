@@ -86,7 +86,7 @@ function SearchPageContent() {
         {debouncedQuery ? (
           <div className="space-y-6">
             {/* Sticky Results Header with Card Size Controls */}
-            <div className="sticky top-14 sm:top-16 z-30 mb-4 sm:mb-6">
+            <div className="sticky z-30 mb-4 sm:mb-6" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
               <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-2xl px-4 sm:px-6 py-3 border border-gray-200/50 dark:border-gray-700/50 shadow-sm">
                 <div className="flex items-center gap-3">
                   <div className="w-1 h-6 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full" />

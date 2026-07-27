@@ -255,21 +255,9 @@ export default function HomePage() {
               );
             })}
 
-          {/* Call to Action */}
-          <section className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-2xl p-6 sm:p-8 text-center border border-blue-200/50 dark:border-blue-800/50 shadow-sm">
-            <h3 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">
-              Can't find what you're looking for?
-            </h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              Use our search to find any audiobook from Audible
-            </p>
-            <a
-              href="/search"
-              className="inline-flex items-center px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-md hover:shadow-lg"
-            >
-              Search Audiobooks
-            </a>
-          </section>
+          {/* The "Can't find what you're looking for?" CTA card used to sit here.
+              Removed now that the header carries a persistent search bar on every
+              page — it linked to /search, which is one keystroke away. */}
         </main>
 
         {/* Footer */}

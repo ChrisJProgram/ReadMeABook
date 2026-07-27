@@ -5,10 +5,10 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Button } from '@/components/ui/Button';
@@ -19,6 +19,9 @@ import { useSmartDropdownPosition } from '@/hooks/useSmartDropdownPosition';
 export function Header() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+  const isSearchPage = pathname === '/search';
+  const headerRef = useRef<HTMLElement>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showBookDate, setShowBookDate] = useState(false);
@@ -73,6 +76,33 @@ export function Header() {
     checkBookDate();
   }, [user]);
 
+  // Publish the header's real height as --rmab-header-h so sticky section bars
+  // (HomeSection's "Popular Audiobooks", author/search result headers) can park
+  // directly beneath it. Those used to hardcode top-14/top-16, which silently
+  // broke the moment the header grew a second row for the search bar.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof window === 'undefined') return;
+
+    const publish = () => {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0) {
+        document.documentElement.style.setProperty('--rmab-header-h', `${Math.round(h)}px`);
+      }
+    };
+
+    publish();
+
+    const observer = new ResizeObserver(publish);
+    observer.observe(el);
+    window.addEventListener('resize', publish);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', publish);
+    };
+  }, [isSearchPage, showMobileMenu, user]);
+
   const handleLogin = async () => {
     try {
       const response = await fetch('/api/auth/plex/login', { method: 'POST' });
@@ -125,7 +155,7 @@ export function Header() {
   );
 
   return (
-    <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-40">
+    <header ref={headerRef} className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-40">
       <div className="container mx-auto px-4 py-3 md:py-4 max-w-7xl">
         <div className="flex items-center justify-between">
           {/* Logo and Version Badge */}
@@ -144,17 +174,6 @@ export function Header() {
             <div className="hidden sm:block flex-shrink-0">
               <VersionBadge />
             </div>
-          </div>
-
-          {/* Desktop Search (F4) */}
-          <div className="hidden md:block flex-1 max-w-xs lg:max-w-sm mx-3 lg:mx-6">
-            <SearchBar
-              variant="header"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              onSubmit={submitSearch}
-              placeholder="Search audiobooks…"
-            />
           </div>
 
           {/* Desktop Navigation */}
@@ -211,27 +230,6 @@ export function Header() {
 
           {/* Mobile Menu Button & User Menu */}
           <div className="flex items-center gap-2 md:gap-4">
-            {/* Search Button (visible on mobile) */}
-            <Link
-              href="/search"
-              className="md:hidden p-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
-              aria-label="Search"
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </Link>
-
             {/* Mobile Menu Button */}
             <button
               onClick={() => setShowMobileMenu(!showMobileMenu)}
@@ -299,19 +297,24 @@ export function Header() {
           </div>
         </div>
 
+        {/* Search row — its own full-width line beneath the nav bar.
+            Suppressed on /search, which already leads with its own large
+            search input; two stacked search boxes would just be confusing. */}
+        {!isSearchPage && (
+          <div className="mt-3 md:mt-4">
+            <SearchBar
+              variant="page"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSubmit={submitSearch}
+              placeholder="Search audiobooks by title, author, or narrator…"
+            />
+          </div>
+        )}
+
         {/* Mobile Navigation Menu */}
         {showMobileMenu && (
           <div className="md:hidden border-t border-gray-200 dark:border-gray-700 mt-3 pt-3">
-            {/* Mobile Search (F4) */}
-            <div className="mb-3">
-              <SearchBar
-                variant="header"
-                value={searchQuery}
-                onChange={setSearchQuery}
-                onSubmit={submitSearch}
-                placeholder="Search audiobooks…"
-              />
-            </div>
             <nav className="flex flex-col space-y-2">
               <Link
                 href="/"
