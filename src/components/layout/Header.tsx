@@ -8,7 +8,9 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { SearchBar } from '@/components/ui/SearchBar';
 import { Button } from '@/components/ui/Button';
 import { VersionBadge } from '@/components/ui/VersionBadge';
 import { ChangePasswordModal } from '@/components/ui/ChangePasswordModal';
@@ -16,10 +18,20 @@ import { useSmartDropdownPosition } from '@/hooks/useSmartDropdownPosition';
 
 export function Header() {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showBookDate, setShowBookDate] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Header search (F4): navigate to the search page seeded with ?q=.
+  const submitSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = searchQuery.trim();
+    router.push(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
+    setShowMobileMenu(false);
+  };
   const { containerRef, dropdownRef, positionAbove, style } =
     useSmartDropdownPosition(showUserMenu);
 
@@ -132,6 +144,17 @@ export function Header() {
             <div className="hidden sm:block flex-shrink-0">
               <VersionBadge />
             </div>
+          </div>
+
+          {/* Desktop Search (F4) */}
+          <div className="hidden md:block flex-1 max-w-xs lg:max-w-sm mx-3 lg:mx-6">
+            <SearchBar
+              variant="header"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onSubmit={submitSearch}
+              placeholder="Search audiobooks…"
+            />
           </div>
 
           {/* Desktop Navigation */}
@@ -279,6 +302,16 @@ export function Header() {
         {/* Mobile Navigation Menu */}
         {showMobileMenu && (
           <div className="md:hidden border-t border-gray-200 dark:border-gray-700 mt-3 pt-3">
+            {/* Mobile Search (F4) */}
+            <div className="mb-3">
+              <SearchBar
+                variant="header"
+                value={searchQuery}
+                onChange={setSearchQuery}
+                onSubmit={submitSearch}
+                placeholder="Search audiobooks…"
+              />
+            </div>
             <nav className="flex flex-col space-y-2">
               <Link
                 href="/"

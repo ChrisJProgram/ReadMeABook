@@ -5,18 +5,24 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/Header';
 import { AudiobookGrid } from '@/components/audiobooks/AudiobookGrid';
 import { LoadMoreBar } from '@/components/ui/LoadMoreBar';
+import { SearchBar } from '@/components/ui/SearchBar';
 import { useSearch, Audiobook } from '@/lib/hooks/useAudiobooks';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { SectionToolbar } from '@/components/ui/SectionToolbar';
 import { usePreferences } from '@/contexts/PreferencesContext';
 
-export default function SearchPage() {
-  const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+function SearchPageContent() {
+  // Seed from /search?q=… so the header search bar (F4) lands here with results.
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get('q') ?? '';
+
+  const [query, setQuery] = useState(initialQuery);
+  const [debouncedQuery, setDebouncedQuery] = useState(initialQuery);
   const { cardSize, setCardSize, squareCovers, setSquareCovers, hideAvailable, setHideAvailable } = usePreferences();
 
   // Debounce search query
@@ -28,6 +34,13 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // Re-seed when the ?q= param changes (e.g. a fresh header search while already
+  // on /search). Sets both query and debouncedQuery so results appear immediately.
+  useEffect(() => {
+    setQuery(initialQuery);
+    setDebouncedQuery(initialQuery);
+  }, [initialQuery]);
+
   const { results, totalResults, hasMore, isLoading, isLoadingMore, loadMore } = useSearch(debouncedQuery);
 
   // Filter out available titles when hideAvailable is enabled
@@ -35,10 +48,6 @@ export default function SearchPage() {
     () => hideAvailable ? results.filter((b: Audiobook) => !b.isAvailable && b.requestStatus !== 'completed') : results,
     [results, hideAvailable]
   );
-
-  const handleSearch = useCallback((e: React.FormEvent) => {
-    e.preventDefault();
-  }, []);
 
   // Header count text: reflects filtered counts
   const visibleCount = filteredResults.length;
@@ -49,9 +58,8 @@ export default function SearchPage() {
       : '';
 
   return (
-    <ProtectedRoute>
-      <div className="min-h-screen">
-        <Header />
+    <div className="min-h-screen">
+      <Header />
 
       <main className="container mx-auto px-4 py-8 max-w-7xl space-y-8">
         {/* Search Header */}
@@ -65,49 +73,14 @@ export default function SearchPage() {
         </div>
 
         {/* Search Form */}
-        <form onSubmit={handleSearch} className="max-w-3xl mx-auto">
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-              <svg
-                className="h-5 w-5 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </div>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by title, author, or narrator..."
-              className="w-full pl-12 pr-12 py-4 text-lg border-2 border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400"
-              autoFocus
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery('')}
-                className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            )}
-          </div>
-        </form>
+        <SearchBar
+          variant="page"
+          value={query}
+          onChange={setQuery}
+          placeholder="Search by title, author, or narrator..."
+          className="max-w-3xl mx-auto"
+          autoFocus
+        />
 
         {/* Results */}
         {debouncedQuery ? (
@@ -183,7 +156,17 @@ export default function SearchPage() {
           </div>
         )}
       </main>
-      </div>
+    </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <ProtectedRoute>
+      {/* useSearchParams() must be inside a Suspense boundary (Next App Router). */}
+      <Suspense fallback={<div className="min-h-screen"><Header /></div>}>
+        <SearchPageContent />
+      </Suspense>
     </ProtectedRoute>
   );
 }
