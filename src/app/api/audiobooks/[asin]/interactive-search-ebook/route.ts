@@ -25,6 +25,7 @@ import {
   searchByTitle,
   getSlowDownloadLinks,
 } from '@/lib/services/ebook-scraper';
+import { searchLibgen, DEFAULT_LIBGEN_MIRROR } from '@/lib/services/libgen-scraper';
 
 const logger = RMABLogger.create('API.Audiobooks.InteractiveSearchEbook');
 
@@ -69,7 +70,7 @@ export interface EbookSearchResult {
     notes: string[];
   };
 
-  source: 'annas_archive' | 'prowlarr';
+  source: 'annas_archive' | 'prowlarr' | 'libgen';
   format?: string;
   md5?: string;
   downloadUrls?: string[];
@@ -216,27 +217,31 @@ export async function POST(
 
       // Get ebook configuration
       const configService = getConfigService();
-      const [annasArchiveEnabled, indexerSearchEnabled, preferredFormat, baseUrl, flaresolverrUrl] = await Promise.all([
+      const [libgenEnabled, annasArchiveEnabled, indexerSearchEnabled, preferredFormat, baseUrl, flaresolverrUrl, libgenBaseUrlCfg] = await Promise.all([
+        configService.get('ebook_libgen_enabled'),
         configService.get('ebook_annas_archive_enabled'),
         configService.get('ebook_indexer_search_enabled'),
         configService.get('ebook_sidecar_preferred_format'),
         configService.get('ebook_sidecar_base_url'),
         configService.get('ebook_sidecar_flaresolverr_url'),
+        configService.get('ebook_libgen_base_url'),
       ]);
 
+      const isLibgenEnabled = libgenEnabled === 'true';
       const isAnnasArchiveEnabled = annasArchiveEnabled === 'true';
       const isIndexerSearchEnabled = indexerSearchEnabled === 'true';
       const format = preferredFormat || 'epub';
       const annasBaseUrl = baseUrl || 'https://annas-archive.gl';
+      const libgenBaseUrl = libgenBaseUrlCfg || DEFAULT_LIBGEN_MIRROR;
 
       // Get language code from Audible region config
       const region = await configService.getAudibleRegion() as AudibleRegion;
       const langConfig = getLanguageForRegion(region);
       const languageCode = langConfig.annasArchiveLang;
 
-      if (!isAnnasArchiveEnabled && !isIndexerSearchEnabled) {
+      if (!isLibgenEnabled && !isAnnasArchiveEnabled && !isIndexerSearchEnabled) {
         return NextResponse.json(
-          { error: 'No ebook sources enabled. Enable Anna\'s Archive or Indexer Search in settings.' },
+          { error: 'No ebook sources enabled. Enable Libgen, Anna\'s Archive, or Indexer Search in settings.' },
           { status: 400 }
         );
       }
@@ -244,62 +249,31 @@ export async function POST(
       const searchTitle = customTitle || audiobook.title;
 
       logger.info(`Interactive ebook search for "${searchTitle}" by ${audiobook.author}`);
-      logger.info(`Sources: Anna's Archive=${isAnnasArchiveEnabled}, Indexer=${isIndexerSearchEnabled}`);
+      logger.info(`Sources: Libgen=${isLibgenEnabled}, Anna's Archive=${isAnnasArchiveEnabled}, Indexer=${isIndexerSearchEnabled}`);
 
-      // Search both sources in parallel
-      const searchPromises: Promise<EbookSearchResult[] | null>[] = [];
+      // Search all enabled sources in parallel, grouped per source.
+      const [libgenResults, annasResults, indexerResults] = await Promise.all([
+        isLibgenEnabled
+          ? searchLibgenForInteractive(searchTitle, audiobook.author, format, libgenBaseUrl, languageCode)
+              .catch((err) => { logger.error(`Libgen search failed: ${err.message}`); return []; })
+          : Promise.resolve([]),
+        isAnnasArchiveEnabled
+          ? searchAnnasArchiveForInteractive(
+              audiobook.audibleAsin || undefined, searchTitle, audiobook.author,
+              format, annasBaseUrl, flaresolverrUrl || undefined, languageCode
+            ).catch((err) => { logger.error(`Anna's Archive search failed: ${err.message}`); return []; })
+          : Promise.resolve([]),
+        isIndexerSearchEnabled
+          ? searchIndexersForInteractive(searchTitle, audiobook.author, format)
+              .catch((err) => { logger.error(`Indexer search failed: ${err.message}`); return []; })
+          : Promise.resolve([]),
+      ]);
 
-      if (isAnnasArchiveEnabled) {
-        searchPromises.push(
-          searchAnnasArchiveForInteractive(
-            audiobook.audibleAsin || undefined,
-            searchTitle,
-            audiobook.author,
-            format,
-            annasBaseUrl,
-            flaresolverrUrl || undefined,
-            languageCode
-          ).catch((err) => {
-            logger.error(`Anna's Archive search failed: ${err.message}`);
-            return null;
-          })
-        );
-      }
-
-      if (isIndexerSearchEnabled) {
-        searchPromises.push(
-          searchIndexersForInteractive(
-            searchTitle,
-            audiobook.author,
-            format
-          ).catch((err) => {
-            logger.error(`Indexer search failed: ${err.message}`);
-            return null;
-          })
-        );
-      }
-
-      const searchResults = await Promise.all(searchPromises);
-
-      // Combine results: Anna's Archive first (if found), then ranked indexer results
+      // Combine: Libgen, then Anna's Archive, then ranked indexer results.
       const combinedResults: EbookSearchResult[] = [];
       let rank = 1;
-
-      // Add Anna's Archive result first (if enabled and found)
-      if (isAnnasArchiveEnabled && searchResults[0]) {
-        const annasResults = searchResults[0];
-        for (const result of annasResults) {
-          combinedResults.push({ ...result, rank: rank++ });
-        }
-      }
-
-      // Add indexer results (already ranked)
-      const indexerResultsIndex = isAnnasArchiveEnabled ? 1 : 0;
-      if (isIndexerSearchEnabled && searchResults[indexerResultsIndex]) {
-        const indexerResults = searchResults[indexerResultsIndex];
-        for (const result of indexerResults) {
-          combinedResults.push({ ...result, rank: rank++ });
-        }
+      for (const result of [...libgenResults, ...annasResults, ...indexerResults]) {
+        combinedResults.push({ ...result, rank: rank++ });
       }
 
       logger.info(`Found ${combinedResults.length} total ebook results`);
@@ -318,6 +292,53 @@ export async function POST(
         { status: 500 }
       );
     }
+  });
+}
+
+/**
+ * Search Libgen and return normalized modal results (F5). Sizes and scores are
+ * real (parsed from the results table), unlike Anna's Archive.
+ */
+async function searchLibgenForInteractive(
+  title: string,
+  author: string,
+  preferredFormat: string,
+  baseUrl: string,
+  languageCode: string = 'en'
+): Promise<EbookSearchResult[]> {
+  const results = await searchLibgen(title, author, preferredFormat, baseUrl, undefined, languageCode);
+
+  return results.map((r): EbookSearchResult => {
+    const score = Math.round(r.score);
+    return {
+      guid: `libgen-${r.md5}`,
+      title: `${title} - ${author}`,
+      size: r.sizeBytes || 0,
+      seeders: undefined, // direct source, not a torrent
+      indexer: 'Libgen',
+      publishDate: new Date(),
+      downloadUrl: r.adsUrl,
+      infoUrl: r.adsUrl,
+
+      score,
+      finalScore: score,
+      bonusPoints: 0,
+      bonusModifiers: [],
+      rank: 1,
+      breakdown: {
+        formatScore: 0,
+        sizeScore: 0,
+        seederScore: 0,
+        matchScore: score,
+        totalScore: score,
+        notes: ['Libgen', r.collection === 'f' ? 'fiction' : r.collection === 'l' ? 'non-fiction' : ''].filter(Boolean),
+      },
+
+      source: 'libgen',
+      format: r.format || preferredFormat,
+      md5: r.md5,
+      downloadUrls: [r.adsUrl],
+    };
   });
 }
 

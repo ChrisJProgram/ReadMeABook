@@ -16,6 +16,7 @@ import { prisma } from '../db';
 import { RMABLogger } from '../utils/logger';
 import { getJobQueueService } from '../services/job-queue.service';
 import { getConfigService } from '../services/config.service';
+import { resolveEbookSourceOrder } from '../utils/ebook-source-order';
 
 export interface FindMissingEbooksPayload {
   jobId?: string;
@@ -83,17 +84,11 @@ export async function processFindMissingEbooks(payload: FindMissingEbooksPayload
       return zeroResult('Auto-grab disabled, skipping', 'skipped-auto-grab-off');
     }
 
-    // Gate #2 — at least one ebook source enabled
-    // Includes legacy back-compat shim: ebook_sidecar_enabled === 'true' counts
-    // as Anna's Archive ON if the new key is absent (mirrors manual fetch route).
-    const [annasArchive, indexerSearch, legacy] = await Promise.all([
-      configService.get('ebook_annas_archive_enabled'),
-      configService.get('ebook_indexer_search_enabled'),
-      configService.get('ebook_sidecar_enabled'),
-    ]);
-    const annasOn = annasArchive === 'true' || (annasArchive == null && legacy === 'true');
-    const indexerOn = indexerSearch === 'true';
-    if (!annasOn && !indexerOn) {
+    // Gate #2 — at least one ebook source enabled (F5: Libgen, indexer, or
+    // Anna's — via the shared resolver, which also applies the legacy
+    // ebook_sidecar_enabled back-compat shim for Anna's).
+    const sourceOrder = await resolveEbookSourceOrder(configService);
+    if (!sourceOrder.anyEnabled) {
       return zeroResult('No ebook sources enabled, skipping', 'skipped-no-source');
     }
 

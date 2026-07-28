@@ -617,6 +617,10 @@ function ResultRow({
   const style = getScoreStyle(score);
   const isUsenet = result.protocol === 'usenet';
   const isAnnasArchive = isEbookMode && result.source === 'annas_archive';
+  const isLibgen = isEbookMode && result.source === 'libgen';
+  // Direct HTTP ebook sources (Anna's Archive, Libgen) have no torrent/NZB
+  // protocol and no seeders — the torrent/seeder chrome is hidden for them.
+  const isDirectEbookSource = isAnnasArchive || isLibgen;
   const displayFormat = result.format || result.ebookFormat;
   const { tags } = extractTitleTags(result.title);
   const displayFormatLower = (displayFormat ?? '').toLowerCase();
@@ -699,6 +703,8 @@ function ResultRow({
           {/* Indexer / Source */}
           {isAnnasArchive ? (
             <span className="text-orange-600 dark:text-orange-400 font-medium">Anna&apos;s Archive</span>
+          ) : isLibgen ? (
+            <span className="text-emerald-600 dark:text-emerald-400 font-medium">Libgen</span>
           ) : (
             <span>{result.indexer}</span>
           )}
@@ -755,8 +761,9 @@ function ResultRow({
             </span>
           ))}
 
-          {/* Protocol (torrent vs usenet) - only show for non-Anna's Archive */}
-          {!isAnnasArchive && (
+          {/* Protocol (torrent vs usenet) - only show for indexer sources, not
+              direct HTTP ebook sources (Anna's Archive, Libgen) */}
+          {!isDirectEbookSource && (
             <>
               <span className="text-gray-300 dark:text-gray-600 select-none">&middot;</span>
               {isUsenet ? (

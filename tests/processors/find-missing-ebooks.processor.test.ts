@@ -9,7 +9,16 @@ import { createJobQueueMock } from '../helpers/job-queue';
 
 const prismaMock = createPrismaMock();
 const jobQueueMock = createJobQueueMock();
-const configMock = vi.hoisted(() => ({ get: vi.fn() }));
+// getMany delegates to get() so it always follows whatever key map a test
+// installs on configMock.get (the F5 source-order resolver reads via getMany).
+const configMock = vi.hoisted(() => ({
+  get: vi.fn(),
+  getMany: vi.fn(async (keys: string[]) => {
+    const out: Record<string, string | null> = {};
+    for (const k of keys) out[k] = await configMock.get(k);
+    return out;
+  }),
+}));
 
 vi.mock('@/lib/db', () => ({
   prisma: prismaMock,

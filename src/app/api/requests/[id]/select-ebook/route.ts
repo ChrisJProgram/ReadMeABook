@@ -26,7 +26,7 @@ interface SelectedEbook {
   infoUrl?: string;
   score: number;
   finalScore: number;
-  source: 'annas_archive' | 'prowlarr';
+  source: 'annas_archive' | 'prowlarr' | 'libgen';
   format?: string;
   md5?: string;
   downloadUrls?: string[];
@@ -148,6 +148,14 @@ export async function POST(
             selectedEbook,
             jobQueue
           );
+        } else if (selectedEbook.source === 'libgen') {
+          // Libgen: Direct HTTP download (final file resolved at download time)
+          await handleLibgenDownload(
+            ebookRequest.id,
+            audiobook,
+            selectedEbook,
+            jobQueue
+          );
         } else {
           // Indexer: Torrent/NZB download
           await handleIndexerDownload(
@@ -158,9 +166,14 @@ export async function POST(
           );
         }
 
+        const sourceLabel =
+          selectedEbook.source === 'annas_archive' ? "Anna's Archive" :
+          selectedEbook.source === 'libgen' ? 'Libgen' :
+          selectedEbook.indexer;
+
         return NextResponse.json({
           success: true,
-          message: `E-book download started from ${selectedEbook.source === 'annas_archive' ? "Anna's Archive" : selectedEbook.indexer}`,
+          message: `E-book download started from ${sourceLabel}`,
           requestId: ebookRequest.id,
         });
 
@@ -224,6 +237,61 @@ async function handleAnnasArchiveDownload(
   );
 
   logger.info(`Queued direct download job for request ${requestId}`);
+}
+
+/**
+ * Handle Libgen download (direct HTTP, final file resolved at download time)
+ */
+async function handleLibgenDownload(
+  requestId: string,
+  audiobook: { id: string; title: string; author: string },
+  selectedEbook: SelectedEbook,
+  jobQueue: ReturnType<typeof getJobQueueService>
+) {
+  const configService = getConfigService();
+  const preferredFormat = await configService.get('ebook_sidecar_preferred_format') || 'epub';
+  const format = selectedEbook.format || preferredFormat;
+
+  logger.info(`Starting Libgen download for "${audiobook.title}"`);
+  logger.info(`MD5: ${selectedEbook.md5}, Format: ${format}`);
+
+  // The stable landing URL(s) — prefer downloadUrls, fall back to downloadUrl.
+  const landingUrls =
+    selectedEbook.downloadUrls && selectedEbook.downloadUrls.length > 0
+      ? selectedEbook.downloadUrls
+      : [selectedEbook.downloadUrl];
+
+  const downloadHistory = await prisma.downloadHistory.create({
+    data: {
+      requestId,
+      indexerName: 'Libgen',
+      torrentName: `${audiobook.title} - ${audiobook.author}.${format}`,
+      torrentSizeBytes: selectedEbook.size ? BigInt(selectedEbook.size) : null,
+      qualityScore: selectedEbook.score,
+      selected: true,
+      downloadClient: 'direct',
+      downloadStatus: 'queued',
+    },
+  });
+
+  await prisma.downloadHistory.update({
+    where: { id: downloadHistory.id },
+    data: {
+      torrentUrl: JSON.stringify(landingUrls),
+    },
+  });
+
+  await jobQueue.addStartDirectDownloadJob(
+    requestId,
+    downloadHistory.id,
+    landingUrls[0],
+    `${audiobook.title} - ${audiobook.author}.${format}`,
+    selectedEbook.size || undefined,
+    'libgen',
+    format
+  );
+
+  logger.info(`Queued Libgen direct download job for request ${requestId}`);
 }
 
 /**

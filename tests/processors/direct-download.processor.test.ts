@@ -21,6 +21,10 @@ const ebookScraperMock = vi.hoisted(() => ({
   extractDownloadUrl: vi.fn(),
 }));
 
+const libgenScraperMock = vi.hoisted(() => ({
+  resolveLibgenDownloadUrl: vi.fn(),
+}));
+
 const fsMock = vi.hoisted(() => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn(),
@@ -44,6 +48,8 @@ vi.mock('@/lib/services/job-queue.service', () => ({
 }));
 
 vi.mock('@/lib/services/ebook-scraper', () => ebookScraperMock);
+
+vi.mock('@/lib/services/libgen-scraper', () => libgenScraperMock);
 
 vi.mock('fs/promises', () => ({
   default: fsMock,
@@ -315,6 +321,96 @@ describe('processStartDirectDownload', () => {
         errorMessage: 'Database error',
       }),
     });
+  });
+
+  // F5: source branch — Libgen resolves via resolveLibgenDownloadUrl (ads.php →
+  // keyed get.php), NOT Anna's extractDownloadUrl slow-download scrape.
+  it('resolves Libgen downloads via resolveLibgenDownloadUrl, not extractDownloadUrl', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+    prismaMock.downloadHistory.findUnique.mockResolvedValue({
+      torrentUrl: JSON.stringify(['https://libgen.bz/ads.php?md5=deadbeef']),
+    });
+
+    libgenScraperMock.resolveLibgenDownloadUrl.mockResolvedValue({
+      url: 'https://libgen.bz/get.php?md5=deadbeef&key=ROT8',
+      format: 'epub',
+    });
+
+    const mockWriteStream = {
+      on: vi.fn((event, cb) => {
+        if (event === 'finish') setTimeout(cb, 10);
+        return mockWriteStream;
+      }),
+      close: vi.fn(),
+    };
+    createWriteStreamMock.mockReturnValue(mockWriteStream);
+    const mockDataStream = {
+      on: vi.fn().mockReturnThis(),
+      pipe: vi.fn().mockReturnValue(mockWriteStream),
+    };
+    axiosMock.mockResolvedValue({ data: mockDataStream, headers: { 'content-length': '900000' } });
+    fsMock.stat.mockResolvedValue({ size: 900000 });
+    prismaMock.request.findUnique.mockResolvedValue({ id: 'req-lg', audiobookId: 'ab-lg', audiobook: { id: 'ab-lg' } });
+
+    const { processStartDirectDownload } = await import('@/lib/processors/direct-download.processor');
+
+    const result = await processStartDirectDownload({
+      requestId: 'req-lg',
+      downloadHistoryId: 'dh-lg',
+      downloadUrl: 'https://libgen.bz/ads.php?md5=deadbeef',
+      targetFilename: 'Libgen Book.epub',
+      source: 'libgen',
+      format: 'epub',
+      jobId: 'job-lg',
+    });
+
+    expect(result.success).toBe(true);
+    // Libgen resolver used; Anna's scraper NOT called.
+    expect(libgenScraperMock.resolveLibgenDownloadUrl).toHaveBeenCalledWith(
+      'https://libgen.bz/ads.php?md5=deadbeef',
+      'epub',
+      expect.anything()
+    );
+    expect(ebookScraperMock.extractDownloadUrl).not.toHaveBeenCalled();
+    // The stream fetch targets the resolved keyed get.php URL.
+    expect(axiosMock).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://libgen.bz/get.php?md5=deadbeef&key=ROT8',
+    }));
+  });
+
+  it('still uses Anna\'s extractDownloadUrl when source is unset (back-compat)', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+    prismaMock.downloadHistory.findUnique.mockResolvedValue({
+      torrentUrl: JSON.stringify(['https://slow.example.com/book']),
+    });
+    ebookScraperMock.extractDownloadUrl.mockResolvedValue({
+      url: 'https://direct.example.com/book.epub',
+      format: 'epub',
+    });
+    const mockWriteStream = {
+      on: vi.fn((event, cb) => { if (event === 'finish') setTimeout(cb, 10); return mockWriteStream; }),
+      close: vi.fn(),
+    };
+    createWriteStreamMock.mockReturnValue(mockWriteStream);
+    const mockDataStream = { on: vi.fn().mockReturnThis(), pipe: vi.fn().mockReturnValue(mockWriteStream) };
+    axiosMock.mockResolvedValue({ data: mockDataStream, headers: { 'content-length': '1000' } });
+    fsMock.stat.mockResolvedValue({ size: 1000 });
+    prismaMock.request.findUnique.mockResolvedValue({ id: 'req-bc', audiobookId: 'ab-bc', audiobook: { id: 'ab-bc' } });
+
+    const { processStartDirectDownload } = await import('@/lib/processors/direct-download.processor');
+
+    await processStartDirectDownload({
+      requestId: 'req-bc',
+      downloadHistoryId: 'dh-bc',
+      downloadUrl: 'https://slow.example.com/book',
+      targetFilename: 'BC Book.epub',
+      jobId: 'job-bc',
+    });
+
+    expect(ebookScraperMock.extractDownloadUrl).toHaveBeenCalled();
+    expect(libgenScraperMock.resolveLibgenDownloadUrl).not.toHaveBeenCalled();
   });
 });
 

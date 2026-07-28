@@ -10,6 +10,9 @@ const prismaMock = createPrismaMock();
 
 const configServiceMock = vi.hoisted(() => ({
   get: vi.fn(),
+  // getMany is consumed by resolveEbookSourceOrder (the real, un-mocked source
+  // order resolver). Implemented in beforeEach to defer to the same key map as get.
+  getMany: vi.fn(),
   getAudibleRegion: vi.fn().mockResolvedValue('us'),
 }));
 
@@ -21,6 +24,11 @@ const ebookScraperMock = vi.hoisted(() => ({
   searchByAsin: vi.fn(),
   searchByTitle: vi.fn(),
   getSlowDownloadLinks: vi.fn(),
+}));
+
+const libgenScraperMock = vi.hoisted(() => ({
+  searchLibgen: vi.fn(),
+  DEFAULT_LIBGEN_MIRROR: 'https://libgen.bz',
 }));
 
 vi.mock('@/lib/db', () => ({
@@ -37,16 +45,37 @@ vi.mock('@/lib/services/job-queue.service', () => ({
 
 vi.mock('@/lib/services/ebook-scraper', () => ebookScraperMock);
 
+vi.mock('@/lib/services/libgen-scraper', () => libgenScraperMock);
+
+/**
+ * Wire configServiceMock.get + .getMany from a single key→value map so the real
+ * resolveEbookSourceOrder (which calls getMany) and the processor (which calls
+ * get) see a consistent config.
+ */
+function setConfig(map: Record<string, string | null>) {
+  configServiceMock.get.mockImplementation(async (key: string) =>
+    key in map ? map[key] : null
+  );
+  configServiceMock.getMany.mockImplementation(async (keys: string[]) => {
+    const out: Record<string, string | null> = {};
+    for (const k of keys) out[k] = key_in(map, k);
+    return out;
+  });
+}
+function key_in(map: Record<string, string | null>, k: string): string | null {
+  return k in map ? map[k] : null;
+}
+
 describe('processSearchEbook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configServiceMock.getAudibleRegion.mockResolvedValue('us');
-    configServiceMock.get.mockImplementation(async (key: string) => {
-      if (key === 'ebook_sidecar_preferred_format') return 'epub';
-      if (key === 'ebook_sidecar_base_url') return 'https://annas-archive.gl';
-      if (key === 'ebook_annas_archive_enabled') return 'true';
-      if (key === 'ebook_indexer_search_enabled') return 'false';
-      return null;
+    // Default: Anna's Archive only (preserves the pre-F5 test expectations).
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_sidecar_base_url: 'https://annas-archive.gl',
+      ebook_annas_archive_enabled: 'true',
+      ebook_indexer_search_enabled: 'false',
     });
   });
 
@@ -227,13 +256,12 @@ describe('processSearchEbook', () => {
     prismaMock.downloadHistory.create.mockResolvedValue({ id: 'dh-6' });
     prismaMock.downloadHistory.update.mockResolvedValue({});
 
-    configServiceMock.get.mockImplementation(async (key: string) => {
-      if (key === 'ebook_sidecar_preferred_format') return 'epub';
-      if (key === 'ebook_sidecar_base_url') return 'https://annas-archive.gl';
-      if (key === 'ebook_sidecar_flaresolverr_url') return 'http://flaresolverr:8191';
-      if (key === 'ebook_annas_archive_enabled') return 'true';
-      if (key === 'ebook_indexer_search_enabled') return 'false';
-      return null;
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_sidecar_base_url: 'https://annas-archive.gl',
+      ebook_sidecar_flaresolverr_url: 'http://flaresolverr:8191',
+      ebook_annas_archive_enabled: 'true',
+      ebook_indexer_search_enabled: 'false',
     });
 
     ebookScraperMock.searchByAsin.mockResolvedValue('md5withflare');
@@ -334,6 +362,120 @@ describe('processSearchEbook', () => {
           'https://link2.example.com',
         ]),
       },
+    });
+  });
+
+  // ==================== F5: Libgen source + priority ordering ====================
+
+  it('tries Libgen first when it has the lower priority, and does NOT fall back on a hit', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.create.mockResolvedValue({ id: 'dh-lg' });
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+
+    // Libgen (priority 10) + Anna's (priority 30) both enabled.
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_libgen_enabled: 'true',
+      ebook_libgen_priority: '10',
+      ebook_annas_archive_enabled: 'true',
+      ebook_annas_archive_priority: '30',
+      ebook_indexer_search_enabled: 'false',
+    });
+
+    libgenScraperMock.searchLibgen.mockResolvedValue([
+      { md5: 'lgmd5', title: 'Libgen Book', author: 'Libgen Author', format: 'epub', sizeBytes: 1048576, language: 'English', collection: 'l', adsUrl: 'https://libgen.bz/ads.php?md5=lgmd5', score: 90 },
+    ]);
+
+    const { processSearchEbook } = await import('@/lib/processors/search-ebook.processor');
+
+    const result = await processSearchEbook({
+      requestId: 'req-lg',
+      audiobook: { id: 'ab-lg', title: 'Libgen Book', author: 'Libgen Author', asin: 'BLGASIN' },
+      jobId: 'job-lg',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.source).toBe('libgen');
+    // Anna's must NOT be consulted once Libgen hits (first-hit-wins).
+    expect(ebookScraperMock.searchByAsin).not.toHaveBeenCalled();
+    expect(ebookScraperMock.searchByTitle).not.toHaveBeenCalled();
+    // Direct download queued with source='libgen', the ads landing URL, size, and format.
+    expect(jobQueueMock.addStartDirectDownloadJob).toHaveBeenCalledWith(
+      'req-lg',
+      'dh-lg',
+      'https://libgen.bz/ads.php?md5=lgmd5',
+      'Libgen Book - Libgen Author.epub',
+      1048576,
+      'libgen',
+      'epub'
+    );
+    expect(prismaMock.downloadHistory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ indexerName: 'Libgen', downloadClient: 'direct' }),
+    });
+  });
+
+  it('falls through from Libgen to the next source when Libgen has no match', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.create.mockResolvedValue({ id: 'dh-fb' });
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_sidecar_base_url: 'https://annas-archive.gl',
+      ebook_libgen_enabled: 'true',
+      ebook_libgen_priority: '10',
+      ebook_annas_archive_enabled: 'true',
+      ebook_annas_archive_priority: '30',
+      ebook_indexer_search_enabled: 'false',
+    });
+
+    libgenScraperMock.searchLibgen.mockResolvedValue([]); // Libgen finds nothing
+    ebookScraperMock.searchByAsin.mockResolvedValue('annasmd5');
+    ebookScraperMock.getSlowDownloadLinks.mockResolvedValue(['https://slow.example.com/annas']);
+
+    const { processSearchEbook } = await import('@/lib/processors/search-ebook.processor');
+
+    const result = await processSearchEbook({
+      requestId: 'req-fb',
+      audiobook: { id: 'ab-fb', title: 'Fallback Book', author: 'Fallback Author', asin: 'BFBASIN' },
+      jobId: 'job-fb',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.source).toBe('annas_archive');
+    expect(libgenScraperMock.searchLibgen).toHaveBeenCalled(); // tried first
+    expect(ebookScraperMock.searchByAsin).toHaveBeenCalled(); // then Anna's
+  });
+
+  it('lists all enabled sources (incl. Libgen) in the no-results message', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_libgen_enabled: 'true',
+      ebook_annas_archive_enabled: 'true',
+      ebook_indexer_search_enabled: 'false',
+    });
+
+    libgenScraperMock.searchLibgen.mockResolvedValue([]);
+    ebookScraperMock.searchByAsin.mockResolvedValue(null);
+    ebookScraperMock.searchByTitle.mockResolvedValue(null);
+
+    const { processSearchEbook } = await import('@/lib/processors/search-ebook.processor');
+
+    const result = await processSearchEbook({
+      requestId: 'req-nores',
+      audiobook: { id: 'ab-nr', title: 'Nowhere Book', author: 'Nobody', asin: 'BNRASIN' },
+      jobId: 'job-nr',
+    });
+
+    expect(result.success).toBe(false);
+    expect(prismaMock.request.update).toHaveBeenCalledWith({
+      where: { id: 'req-nores' },
+      data: expect.objectContaining({
+        status: 'awaiting_search',
+        errorMessage: expect.stringContaining('Libgen'),
+      }),
     });
   });
 });

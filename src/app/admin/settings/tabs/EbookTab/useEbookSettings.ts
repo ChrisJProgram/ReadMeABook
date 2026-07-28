@@ -25,7 +25,7 @@ export function useEbookSettings({ ebook, onChange, onSuccess, onError, markAsSa
   /**
    * Update a single ebook field
    */
-  const updateEbook = (field: keyof EbookSettings, value: string | boolean) => {
+  const updateEbook = (field: keyof EbookSettings, value: string | boolean | number) => {
     onChange({ ...ebook, [field]: value });
     if (field === 'flaresolverrUrl') {
       setFlaresolverrTestResult(null);
@@ -80,8 +80,13 @@ export function useEbookSettings({ ebook, onChange, onSuccess, onError, markAsSa
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          libgenEnabled: ebook.libgenEnabled || false,
+          libgenBaseUrl: ebook.libgenBaseUrl || 'https://libgen.bz',
           annasArchiveEnabled: ebook.annasArchiveEnabled || false,
           indexerSearchEnabled: ebook.indexerSearchEnabled || false,
+          libgenPriority: ebook.libgenPriority ?? 10,
+          indexerPriority: ebook.indexerPriority ?? 20,
+          annasArchivePriority: ebook.annasArchivePriority ?? 30,
           format: ebook.preferredFormat || 'epub',
           baseUrl: ebook.baseUrl || 'https://annas-archive.gl',
           flaresolverrUrl: ebook.flaresolverrUrl || '',
@@ -107,7 +112,7 @@ export function useEbookSettings({ ebook, onChange, onSuccess, onError, markAsSa
   /**
    * Helper to check if any ebook source is enabled
    */
-  const isAnySourceEnabled = ebook.annasArchiveEnabled || ebook.indexerSearchEnabled;
+  const isAnySourceEnabled = ebook.libgenEnabled || ebook.annasArchiveEnabled || ebook.indexerSearchEnabled;
 
   return {
     saving,

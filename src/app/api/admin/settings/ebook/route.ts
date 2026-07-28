@@ -14,10 +14,36 @@ export async function PUT(request: NextRequest) {
     return requireAdmin(req, async () => {
       try {
         // Parse request body - new structure with separate source toggles
-        const { annasArchiveEnabled, indexerSearchEnabled, format, baseUrl, flaresolverrUrl, autoGrabEnabled, kindleFixEnabled } = await request.json();
+        const {
+          annasArchiveEnabled, indexerSearchEnabled, format, baseUrl, flaresolverrUrl,
+          autoGrabEnabled, kindleFixEnabled,
+          // F5: Libgen source + per-source priority ordering (G1)
+          libgenEnabled, libgenBaseUrl, libgenPriority, indexerPriority, annasArchivePriority,
+        } = await request.json();
 
         // Enforce: auto-grab must be false if no sources are enabled
-        const effectiveAutoGrabEnabled = (annasArchiveEnabled || indexerSearchEnabled) ? (autoGrabEnabled ?? true) : false;
+        const effectiveAutoGrabEnabled =
+          (libgenEnabled || annasArchiveEnabled || indexerSearchEnabled)
+            ? (autoGrabEnabled ?? true)
+            : false;
+
+        // Normalize priorities to sane integers (1-99); fall back to defaults.
+        const clampPriority = (v: unknown, fallback: number): number => {
+          const n = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10);
+          if (!Number.isFinite(n)) return fallback;
+          return Math.min(99, Math.max(1, Math.trunc(n)));
+        };
+        const libgenPri = clampPriority(libgenPriority, 10);
+        const indexerPri = clampPriority(indexerPriority, 20);
+        const annasPri = clampPriority(annasArchivePriority, 30);
+
+        // Validate libgenBaseUrl if provided
+        if (libgenEnabled && libgenBaseUrl && !String(libgenBaseUrl).startsWith('http')) {
+          return NextResponse.json(
+            { error: 'Libgen base URL must start with http:// or https://' },
+            { status: 400 }
+          );
+        }
 
         // Validate format
         const validFormats = ['epub', 'pdf', 'mobi', 'azw3', 'any'];
@@ -51,6 +77,12 @@ export async function PUT(request: NextRequest) {
         const configs = [
           // New granular source toggles
           {
+            key: 'ebook_libgen_enabled',
+            value: libgenEnabled ? 'true' : 'false',
+            category: 'ebook',
+            description: 'Enable e-book downloads from Libgen (direct mirror)',
+          },
+          {
             key: 'ebook_annas_archive_enabled',
             value: annasArchiveEnabled ? 'true' : 'false',
             category: 'ebook',
@@ -61,6 +93,32 @@ export async function PUT(request: NextRequest) {
             value: indexerSearchEnabled ? 'true' : 'false',
             category: 'ebook',
             description: 'Enable e-book downloads via indexer search (Prowlarr)',
+          },
+          // Per-source priority (lower = tried first). F5 G1.
+          {
+            key: 'ebook_libgen_priority',
+            value: String(libgenPri),
+            category: 'ebook',
+            description: 'Libgen source priority (lower is tried first)',
+          },
+          {
+            key: 'ebook_indexer_priority',
+            value: String(indexerPri),
+            category: 'ebook',
+            description: 'Indexer-search source priority (lower is tried first)',
+          },
+          {
+            key: 'ebook_annas_archive_priority',
+            value: String(annasPri),
+            category: 'ebook',
+            description: 'Anna\'s Archive source priority (lower is tried first)',
+          },
+          // Libgen mirror base URL
+          {
+            key: 'ebook_libgen_base_url',
+            value: libgenBaseUrl || 'https://libgen.bz',
+            category: 'ebook',
+            description: 'Base URL for the Libgen mirror',
           },
           // General settings
           {

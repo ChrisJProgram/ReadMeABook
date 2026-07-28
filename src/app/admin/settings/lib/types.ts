@@ -127,8 +127,15 @@ export interface PathsSettings {
  */
 export interface EbookSettings {
   // Source toggles
+  libgenEnabled: boolean;
   annasArchiveEnabled: boolean;
   indexerSearchEnabled: boolean;
+  // Per-source priority (lower = tried first). F5 G1.
+  libgenPriority: number;
+  indexerPriority: number;
+  annasArchivePriority: number;
+  // Libgen specific settings
+  libgenBaseUrl: string;
   // Anna's Archive specific settings
   baseUrl: string;
   flaresolverrUrl: string;

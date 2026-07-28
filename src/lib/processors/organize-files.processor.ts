@@ -15,6 +15,7 @@ import { PathMapper, PathMappingConfig } from '../utils/path-mapper';
 import { generateFilesHash } from '../utils/files-hash';
 import { fixEpubForKindle, cleanupFixedEpub } from '../utils/epub-fixer';
 import { removeEmptyParentDirectories } from '../utils/cleanup-helpers';
+import { resolveEbookSourceOrder } from '../utils/ebook-source-order';
 import { getAudibleService } from '../integrations/audible.service';
 import { addAutoBlock } from '../services/blocklist.service';
 
@@ -952,18 +953,13 @@ async function createEbookRequestIfEnabled(
       return;
     }
 
-    // Check which ebook sources are enabled
-    const annasArchiveEnabled = await configService.get('ebook_annas_archive_enabled');
-    const indexerSearchEnabled = await configService.get('ebook_indexer_search_enabled');
-
-    // Legacy migration: check old key if new keys don't exist
-    const legacyEnabled = await configService.get('ebook_sidecar_enabled');
-    const isAnnasArchiveEnabled = annasArchiveEnabled === 'true' ||
-      (annasArchiveEnabled === null && legacyEnabled === 'true');
-    const isIndexerSearchEnabled = indexerSearchEnabled === 'true';
+    // Check which ebook sources are enabled (F5: Libgen, indexer, or Anna's —
+    // via the shared resolver, which also applies the legacy
+    // ebook_sidecar_enabled back-compat shim for Anna's).
+    const sourceOrder = await resolveEbookSourceOrder(configService);
 
     // If no sources are enabled, skip ebook creation
-    if (!isAnnasArchiveEnabled && !isIndexerSearchEnabled) {
+    if (!sourceOrder.anyEnabled) {
       logger.info('Ebook downloads disabled (no sources enabled), skipping ebook request creation');
       return;
     }

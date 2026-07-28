@@ -141,11 +141,18 @@ export async function GET(request: NextRequest) {
         dirChmod: configMap.get('dir_chmod') || '775',
       },
       ebook: {
+        // F5: Libgen source toggle + mirror base URL
+        libgenEnabled: configMap.get('ebook_libgen_enabled') === 'true',
+        libgenBaseUrl: configMap.get('ebook_libgen_base_url') || 'https://libgen.bz',
         // New granular source toggles (with migration from legacy ebook_sidecar_enabled)
         annasArchiveEnabled: configMap.get('ebook_annas_archive_enabled') === 'true' ||
           // Migration: if old key is true and new key doesn't exist, use old value
           (configMap.get('ebook_annas_archive_enabled') === undefined && configMap.get('ebook_sidecar_enabled') === 'true'),
         indexerSearchEnabled: configMap.get('ebook_indexer_search_enabled') === 'true',
+        // Per-source priority (lower = tried first). F5 G1 defaults: libgen 10, indexer 20, annas 30.
+        libgenPriority: parseInt(configMap.get('ebook_libgen_priority') || '10', 10),
+        indexerPriority: parseInt(configMap.get('ebook_indexer_priority') || '20', 10),
+        annasArchivePriority: parseInt(configMap.get('ebook_annas_archive_priority') || '30', 10),
         // Anna's Archive specific settings
         baseUrl: configMap.get('ebook_sidecar_base_url') || 'https://annas-archive.gl',
         flaresolverrUrl: configMap.get('ebook_sidecar_flaresolverr_url') || '',

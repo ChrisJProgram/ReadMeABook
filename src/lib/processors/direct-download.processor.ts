@@ -2,7 +2,9 @@
  * Component: Direct Download Job Processors
  * Documentation: documentation/integrations/ebook-sidecar.md
  *
- * Handles direct HTTP downloads for ebooks from Anna's Archive.
+ * Handles direct HTTP downloads for ebooks from the direct sources: Anna's
+ * Archive (slow-download page scrape) and Libgen (ads.php → rotating-key
+ * get.php). The source is selected per-job via payload.source.
  * Reports progress similar to qBittorrent/SABnzbd for unified UI.
  */
 
@@ -11,6 +13,7 @@ import { prisma } from '../db';
 import { getConfigService } from '../services/config.service';
 import { RMABLogger } from '../utils/logger';
 import { extractDownloadUrl, ExtractedDownload } from '../services/ebook-scraper';
+import { resolveLibgenDownloadUrl } from '../services/libgen-scraper';
 import axios from 'axios';
 import { RMAB_USER_AGENT } from '../utils/user-agent';
 import fs from 'fs/promises';
@@ -51,10 +54,11 @@ function generateDownloadId(): string {
  */
 export async function processStartDirectDownload(payload: StartDirectDownloadPayload): Promise<any> {
   const { requestId, downloadHistoryId, downloadUrl, targetFilename, expectedSize, jobId } = payload;
+  const source = payload.source ?? 'annas_archive';
 
   const logger = RMABLogger.forJob(jobId, 'DirectDownload');
 
-  logger.info(`Starting direct download for request ${requestId}`);
+  logger.info(`Starting direct download for request ${requestId} (source: ${source})`);
 
   try {
     // Update request status to downloading
@@ -111,14 +115,13 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
       logger.info(`Attempting download link ${i + 1}/${attemptsLimit}...`);
 
       try {
-        // Extract actual download URL from slow download page
-        const extracted = await extractDownloadUrl(
-          slowLink,
-          baseUrl,
-          preferredFormat,
-          logger,
-          flaresolverrUrl
-        );
+        // Resolve the actual streamable file URL. The two direct sources need
+        // different resolution: Libgen resolves a rotating-key get.php from its
+        // ads.php landing URL (final file, no waitlist); Anna's Archive scrapes
+        // its slow-download page.
+        const extracted = source === 'libgen'
+          ? await resolveLibgenDownloadUrl(slowLink, payload.format || preferredFormat, logger)
+          : await extractDownloadUrl(slowLink, baseUrl, preferredFormat, logger, flaresolverrUrl);
 
         if (!extracted) {
           logger.warn(`No download URL found on page ${i + 1}`);

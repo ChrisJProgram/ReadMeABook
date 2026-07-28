@@ -150,8 +150,8 @@ export interface EbookSearchResult {
   author: string;
   format: string;
   fileSize?: number;
-  downloadUrls: string[]; // Slow download URLs from Anna's Archive
-  source: 'annas_archive'; // For future indexer support
+  downloadUrls: string[]; // Anna's slow-download URLs, or Libgen ads.php landing URLs
+  source: 'annas_archive' | 'libgen'; // direct HTTP sources (indexer path is separate)
   score: number; // Ranking score (for future multi-source ranking)
 }
 
@@ -161,6 +161,13 @@ export interface StartDirectDownloadPayload extends JobPayload {
   downloadUrl: string;
   targetFilename: string;
   expectedSize?: number;
+  /** Which direct source these URLs belong to. Determines how the final file
+   *  URL is resolved: 'annas_archive' scrapes a slow-download page, 'libgen'
+   *  resolves a rotating-key get.php from an ads.php landing URL. Defaults to
+   *  'annas_archive' for back-compat with jobs enqueued before F5. */
+  source?: 'annas_archive' | 'libgen';
+  /** Known file extension (Libgen get.php carries none). */
+  format?: string;
 }
 
 export interface MonitorDirectDownloadPayload extends JobPayload {
@@ -888,7 +895,9 @@ export class JobQueueService {
     downloadHistoryId: string,
     downloadUrl: string,
     targetFilename: string,
-    expectedSize?: number
+    expectedSize?: number,
+    source: 'annas_archive' | 'libgen' = 'annas_archive',
+    format?: string
   ): Promise<string> {
     return await this.addJob(
       'start_direct_download',
@@ -898,6 +907,8 @@ export class JobQueueService {
         downloadUrl,
         targetFilename,
         expectedSize,
+        source,
+        format,
       } as StartDirectDownloadPayload,
       {
         priority: 9, // High priority - download selected ebook

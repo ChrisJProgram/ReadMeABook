@@ -48,6 +48,91 @@ export function EbookTab({ ebook, onChange, onSuccess, onError, markAsSaved }: E
         </p>
       </div>
 
+      {/* Source-order hint */}
+      {isAnySourceEnabled && (
+        <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Enabled sources are tried in <strong>priority</strong> order (lowest number first);
+            the first source with a match wins. Default order: Libgen → Indexer → Anna&apos;s Archive.
+          </p>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          SECTION 0: LIBGEN (primary direct source)
+          ═══════════════════════════════════════════════════════════════════════ */}
+      <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+        <div className="bg-gray-50 dark:bg-gray-800 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider">
+            Libgen
+          </h3>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* Enable Toggle */}
+          <div className="flex items-start gap-4">
+            <input
+              type="checkbox"
+              id="libgen-enabled"
+              checked={ebook.libgenEnabled || false}
+              onChange={(e) => updateEbook('libgenEnabled', e.target.checked)}
+              className="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <div className="flex-1">
+              <label
+                htmlFor="libgen-enabled"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100 cursor-pointer"
+              >
+                Enable Libgen downloads
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Download e-books directly from a Library Genesis mirror (fiction and non-fiction).
+                No FlareSolverr required.
+              </p>
+            </div>
+          </div>
+
+          {/* Libgen specific settings - only shown when enabled */}
+          {ebook.libgenEnabled && (
+            <>
+              {/* Priority */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Priority
+                </label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={ebook.libgenPriority ?? 10}
+                  onChange={(e) => updateEbook('libgenPriority', parseInt(e.target.value, 10) || 10)}
+                  className="w-28"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Lower is tried first (default 10).
+                </p>
+              </div>
+
+              {/* Base URL */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Mirror Base URL
+                </label>
+                <Input
+                  type="text"
+                  value={ebook.libgenBaseUrl || 'https://libgen.bz'}
+                  onChange={(e) => updateEbook('libgenBaseUrl', e.target.value)}
+                  placeholder="https://libgen.bz"
+                  className="font-mono"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Change this if the primary Libgen mirror is unavailable (e.g. libgen.vg).
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* ═══════════════════════════════════════════════════════════════════════
           SECTION 1: ANNA'S ARCHIVE
           ═══════════════════════════════════════════════════════════════════════ */}
@@ -83,6 +168,24 @@ export function EbookTab({ ebook, onChange, onSuccess, onError, markAsSaved }: E
           {/* Anna's Archive specific settings - only shown when enabled */}
           {ebook.annasArchiveEnabled && (
             <>
+              {/* Priority */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Priority
+                </label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={ebook.annasArchivePriority ?? 30}
+                  onChange={(e) => updateEbook('annasArchivePriority', parseInt(e.target.value, 10) || 30)}
+                  className="w-28"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Lower is tried first (default 30 — last resort).
+                </p>
+              </div>
+
               {/* Base URL */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -185,15 +288,33 @@ export function EbookTab({ ebook, onChange, onSuccess, onError, markAsSaved }: E
             </div>
           </div>
 
-          {/* Info hint about indexer settings */}
+          {/* Indexer priority + info hint */}
           {ebook.indexerSearchEnabled && (
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
-              <p className="text-sm text-blue-800 dark:text-blue-200">
-                <strong>Configure Categories:</strong> E-book category settings are configured per-indexer
-                in the <span className="font-medium">Indexers</span> tab. Look for the "EBook" tab when
-                editing an indexer.
-              </p>
-            </div>
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Priority
+                </label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={ebook.indexerPriority ?? 20}
+                  onChange={(e) => updateEbook('indexerPriority', parseInt(e.target.value, 10) || 20)}
+                  className="w-28"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Lower is tried first (default 20).
+                </p>
+              </div>
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  <strong>Configure Categories:</strong> E-book category settings are configured per-indexer
+                  in the <span className="font-medium">Indexers</span> tab. Look for the "EBook" tab when
+                  editing an indexer.
+                </p>
+              </div>
+            </>
           )}
         </div>
       </div>
