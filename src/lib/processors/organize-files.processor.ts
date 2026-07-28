@@ -14,6 +14,7 @@ import { CLIENT_PROTOCOL_MAP, DownloadClientType } from '../interfaces/download-
 import { PathMapper, PathMappingConfig } from '../utils/path-mapper';
 import { generateFilesHash } from '../utils/files-hash';
 import { fixEpubForKindle, cleanupFixedEpub } from '../utils/epub-fixer';
+import { inspectEpubQuality } from '../utils/epub-quality';
 import { removeEmptyParentDirectories } from '../utils/cleanup-helpers';
 import { resolveEbookSourceOrder } from '../utils/ebook-source-order';
 import { getAudibleService } from '../integrations/audible.service';
@@ -759,6 +760,67 @@ async function processEbookOrganization(
   // Detect the actual EPUB file path (handles both single file and directory downloads)
   const epubFilePath = await detectEpubFilePath(downloadPath);
 
+  // ==================== F6: ebook quality gate ====================
+  // Post-download, pre-import: detect page-scan wrappers (near-zero text +
+  // image-dominated archive) and missing chapter TOCs. Action is configurable
+  // (ebook_quality_gate = off | flag | reject, default flag). Only the STRONG
+  // verdict (scan AND no chapters) may reject; an inspection error NEVER fails
+  // the import (D6's probe rule). The reject path RETURNS (never throws) so the
+  // global failed-handler can't overwrite awaiting_search — the F2(b) rule.
+  let qualityNotes: string | null = null;
+  if (epubFilePath) {
+    const gateAction = (await getConfigService().get('ebook_quality_gate')) || 'flag';
+    if (gateAction === 'flag' || gateAction === 'reject') {
+      const quality = inspectEpubQuality(epubFilePath);
+      if (!quality.ok) {
+        logger.warn(`Ebook quality inspection failed (import proceeds): ${quality.error}`);
+      } else if (quality.strongVerdict && gateAction === 'reject') {
+        const reasonDetail = quality.notes.join('; ');
+        logger.warn(`Ebook REJECTED by quality gate: ${reasonDetail}`);
+
+        // Blocklist this exact release so re-selection skips it. For direct
+        // downloads the releaseHash carries the source md5 (edition-level skip);
+        // for indexer grabs it's the torrent hash — both matched by
+        // filterBlockedResults before the next pick.
+        if (downloadHistory?.torrentName) {
+          await addAutoBlock({
+            requestId,
+            releaseName: downloadHistory.torrentName,
+            releaseHash: downloadHistory.torrentHash ?? downloadHistory.nzbId ?? null,
+            indexerName: downloadHistory.indexerName ?? null,
+            indexerId: downloadHistory.indexerId ?? null,
+            source: 'organize_fail',
+            reason: 'Ebook quality gate: page-scan suspected',
+            reasonDetail,
+            downloadHistoryId: downloadHistory.id,
+            jobId,
+          });
+        }
+
+        await prisma.request.update({
+          where: { id: requestId },
+          data: {
+            status: 'awaiting_search',
+            errorMessage: `Ebook failed quality gate (${reasonDetail}) — blocklisted, re-searching`,
+            updatedAt: new Date(),
+          },
+        });
+
+        return {
+          success: false,
+          message: 'Ebook rejected by quality gate, queued for re-search',
+          requestId,
+          audiobookId,
+          qualityGate: 'rejected',
+          reasonDetail,
+        };
+      } else if (quality.notes.length > 0) {
+        qualityNotes = quality.notes.join('; ');
+        logger.warn(`Ebook quality flags (import proceeds): ${qualityNotes}`);
+      }
+    }
+  }
+
   // Only apply Kindle fix for EPUB files when enabled
   if (epubFilePath) {
     const configService = getConfigService();
@@ -837,12 +899,14 @@ async function processEbookOrganization(
 
   logger.info(`Successfully moved ebook to ${result.targetPath}`);
 
-  // Update book record with file path
+  // Update book record with file path (+ F6 quality flags; null clears any
+  // stale note from a previously flagged grab of this book)
   await prisma.audiobook.update({
     where: { id: audiobookId },
     data: {
       filePath: result.targetPath,
       fileFormat: result.format || 'epub',
+      ebookQualityNotes: qualityNotes,
       status: 'completed',
       completedAt: new Date(),
       updatedAt: new Date(),

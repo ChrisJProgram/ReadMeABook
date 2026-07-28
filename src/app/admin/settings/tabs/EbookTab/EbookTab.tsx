@@ -401,6 +401,33 @@ export function EbookTab({ ebook, onChange, onSuccess, onError, markAsSaved }: E
                 </div>
               </div>
             )}
+
+            {/* F6: Ebook quality gate */}
+            <div className="pt-2 border-t border-gray-200 dark:border-gray-700 mt-4">
+              <label
+                htmlFor="ebook-quality-gate"
+                className="block text-sm font-medium text-gray-900 dark:text-gray-100"
+              >
+                Quality gate (page-scan / missing-chapter detection)
+              </label>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1 mb-2">
+                Inspects every downloaded EPUB before import: page-scan wrappers (images instead of
+                text) and missing chapter TOCs. <span className="font-medium">Flag</span> imports the
+                book and shows a warning on the request. <span className="font-medium">Reject</span>{' '}
+                additionally blocklists a confirmed page-scan (near-zero text AND image-dominated AND
+                no chapters) and re-searches for a different release.
+              </p>
+              <select
+                id="ebook-quality-gate"
+                value={ebook.qualityGate || 'flag'}
+                onChange={(e) => updateEbook('qualityGate', e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100"
+              >
+                <option value="off">Off — no inspection</option>
+                <option value="flag">Flag — import and annotate (default)</option>
+                <option value="reject">Reject — blocklist confirmed scans and re-search</option>
+              </select>
+            </div>
           </div>
         </div>
       )}

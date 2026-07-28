@@ -19,7 +19,18 @@ export async function PUT(request: NextRequest) {
           autoGrabEnabled, kindleFixEnabled,
           // F5: Libgen source + per-source priority ordering (G1)
           libgenEnabled, libgenBaseUrl, libgenPriority, indexerPriority, annasArchivePriority,
+          // F6: quality gate action (off | flag | reject)
+          qualityGate,
         } = await request.json();
+
+        // F6: validate gate action
+        const validGateActions = ['off', 'flag', 'reject'];
+        if (qualityGate !== undefined && !validGateActions.includes(qualityGate)) {
+          return NextResponse.json(
+            { error: `Invalid qualityGate. Must be one of: ${validGateActions.join(', ')}` },
+            { status: 400 }
+          );
+        }
 
         // Enforce: auto-grab must be false if no sources are enabled
         const effectiveAutoGrabEnabled =
@@ -152,6 +163,13 @@ export async function PUT(request: NextRequest) {
             value: kindleFixEnabled ? 'true' : 'false',
             category: 'ebook',
             description: 'Apply compatibility fixes to EPUB files for Kindle import',
+          },
+          // F6: quality gate (page-scan / no-chapters detection at import)
+          {
+            key: 'ebook_quality_gate',
+            value: qualityGate || 'flag',
+            category: 'ebook',
+            description: 'Ebook quality gate action: off, flag (annotate record), or reject (blocklist + re-search on strong page-scan verdict)',
           },
         ];
 

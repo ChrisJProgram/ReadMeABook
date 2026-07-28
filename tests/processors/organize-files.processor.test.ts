@@ -3,12 +3,18 @@
  * Documentation: documentation/phase3/file-organization.md
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPrismaMock } from '../helpers/prisma';
 import { generateFilesHash } from '@/lib/utils/files-hash';
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import nodePath from 'path';
 
 const prismaMock = createPrismaMock();
-const organizerMock = vi.hoisted(() => ({ organize: vi.fn() }));
+const organizerMock = vi.hoisted(() => ({ organize: vi.fn(), organizeEbook: vi.fn() }));
+// F6: the quality inspector is mocked for WIRING tests — its detection logic has
+// its own unit suite against real EPUB archives (tests/utils/epub-quality.test.ts).
+const inspectEpubQualityMock = vi.hoisted(() => vi.fn());
 const libraryServiceMock = vi.hoisted(() => ({ triggerLibraryScan: vi.fn() }));
 const jobQueueMock = vi.hoisted(() => ({
   addNotificationJob: vi.fn(() => Promise.resolve()),
@@ -45,6 +51,10 @@ vi.mock('@/lib/utils/format-coercion', () => formatCoercionMock);
 
 const audioProbeMock = vi.hoisted(() => ({ probeAudioFile: vi.fn() }));
 vi.mock('@/lib/utils/audio-probe', () => audioProbeMock);
+
+vi.mock('@/lib/utils/epub-quality', () => ({
+  inspectEpubQuality: inspectEpubQualityMock,
+}));
 
 describe('processOrganizeFiles', () => {
   beforeEach(() => {
@@ -728,6 +738,179 @@ describe('processOrganizeFiles', () => {
         }),
       })
     );
+  });
+
+  // ================= F6: ebook quality gate =================
+
+  describe('F6: ebook quality gate', () => {
+    let epubPath: string;
+
+    beforeAll(async () => {
+      // detectEpubFilePath stats the real filesystem — give it a real .epub file
+      // (content irrelevant: the inspector itself is mocked in this suite).
+      const dir = await mkdtemp(nodePath.join(tmpdir(), 'f6-organize-'));
+      epubPath = nodePath.join(dir, 'book.epub');
+      await writeFile(epubPath, 'stub');
+    });
+
+    const ebookSetup = (gate: string | null) => {
+      prismaMock.request.findUnique.mockResolvedValue({
+        id: 'req-e1',
+        type: 'ebook',
+        user: { plexUsername: 'testuser' },
+      });
+      prismaMock.audiobook.findUnique.mockResolvedValue({
+        id: 'e1',
+        title: 'Book',
+        author: 'Author',
+        narrator: 'N',
+        year: 2020,
+        series: 'S',
+        seriesPart: '1',
+        audibleAsin: 'ASIN1',
+      });
+      prismaMock.downloadHistory.findFirst.mockResolvedValue({
+        id: 'dh-1',
+        torrentName: 'Book - Author.epub',
+        torrentHash: 'md5abc',
+        nzbId: null,
+        indexerName: 'Libgen',
+        indexerId: null,
+        downloadClient: 'direct',
+      });
+      prismaMock.request.update.mockResolvedValue({});
+      prismaMock.audiobook.update.mockResolvedValue({});
+      prismaMock.blockedRelease.upsert.mockResolvedValue({ id: 'b1', createdAt: new Date() });
+      organizerMock.organizeEbook.mockResolvedValue({
+        success: true,
+        targetPath: '/media/Author/Book/book.epub',
+        errors: [],
+        format: 'epub',
+      });
+      configMock.getBackendMode.mockResolvedValue('plex');
+      configMock.get.mockImplementation(async (key: string) => {
+        if (key === 'ebook_quality_gate') return gate;
+        return null;
+      });
+    };
+
+    const run = async () => {
+      const { processOrganizeFiles } = await import('@/lib/processors/organize-files.processor');
+      return processOrganizeFiles({
+        requestId: 'req-e1',
+        audiobookId: 'e1',
+        downloadPath: epubPath,
+        jobId: 'job-e1',
+      });
+    };
+
+    const strongReport = {
+      ok: true,
+      spineDocCount: 10,
+      totalTextChars: 0,
+      avgTextCharsPerDoc: 0,
+      imageCount: 10,
+      imageBytes: 50_000,
+      archiveBytes: 55_000,
+      imageByteShare: 0.9,
+      tocEntries: 0,
+      scanSuspected: true,
+      noChapters: true,
+      strongVerdict: true,
+      notes: ['possibly scanned pages (images 90% of archive across 10 files; ~0 text chars/page over 10 pages)', 'no chapter TOC (0 entries)'],
+    };
+
+    it('flag mode (default): imports anyway and persists the quality notes', async () => {
+      ebookSetup(null); // unset config → default 'flag'
+      inspectEpubQualityMock.mockReturnValue(strongReport);
+
+      const result = await run();
+
+      expect(result.success).toBe(true);
+      expect(organizerMock.organizeEbook).toHaveBeenCalled();
+      expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'completed',
+            ebookQualityNotes: expect.stringContaining('possibly scanned'),
+          }),
+        })
+      );
+      // request reaches the ebook terminal state
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'downloaded' }) })
+      );
+      expect(prismaMock.blockedRelease.upsert).not.toHaveBeenCalled();
+    });
+
+    it('reject mode + strong verdict: blocklists, flips to awaiting_search, RETURNS (no throw), never organizes', async () => {
+      ebookSetup('reject');
+      inspectEpubQualityMock.mockReturnValue(strongReport);
+
+      const result = await run(); // must resolve, not reject — the F2(b) return-not-throw rule
+
+      expect(result.success).toBe(false);
+      expect(result.qualityGate).toBe('rejected');
+      expect(organizerMock.organizeEbook).not.toHaveBeenCalled();
+      // blocklisted with the md5 as the release hash (edition-level skip)
+      expect(prismaMock.blockedRelease.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            source: 'organize_fail',
+            releaseHash: 'md5abc',
+            reason: expect.stringContaining('quality gate'),
+          }),
+        })
+      );
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'awaiting_search' }) })
+      );
+    });
+
+    it('reject mode + WEAK verdict (no chapters only): still imports, only flags', async () => {
+      ebookSetup('reject');
+      inspectEpubQualityMock.mockReturnValue({
+        ...strongReport,
+        scanSuspected: false,
+        strongVerdict: false,
+        totalTextChars: 50_000,
+        avgTextCharsPerDoc: 5_000,
+        notes: ['no chapter TOC (0 entries)'],
+      });
+
+      const result = await run();
+
+      expect(result.success).toBe(true);
+      expect(organizerMock.organizeEbook).toHaveBeenCalled();
+      expect(prismaMock.blockedRelease.upsert).not.toHaveBeenCalled();
+      expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ ebookQualityNotes: expect.stringContaining('no chapter TOC') }),
+        })
+      );
+    });
+
+    it('gate off: never inspects', async () => {
+      ebookSetup('off');
+      const result = await run();
+      expect(result.success).toBe(true);
+      expect(inspectEpubQualityMock).not.toHaveBeenCalled();
+    });
+
+    it('inspection error NEVER fails the import (probe rule)', async () => {
+      ebookSetup('reject');
+      inspectEpubQualityMock.mockReturnValue({ ok: false, error: 'corrupt zip' });
+
+      const result = await run();
+
+      expect(result.success).toBe(true);
+      expect(organizerMock.organizeEbook).toHaveBeenCalled();
+      expect(prismaMock.blockedRelease.upsert).not.toHaveBeenCalled();
+      // clean import clears any stale note (null write)
+      expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ ebookQualityNotes: null }) })
+      );
+    });
   });
 });
 

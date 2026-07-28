@@ -70,6 +70,10 @@ describe('processSearchEbook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configServiceMock.getAudibleRegion.mockResolvedValue('us');
+    // F6: every source path now consults the per-request blocklist — default to
+    // empty so the filter is a no-op unless a test overrides (same convention as
+    // the search-indexers suite).
+    prismaMock.blockedRelease.findMany.mockResolvedValue([]);
     // Default: Anna's Archive only (preserves the pre-F5 test expectations).
     setConfig({
       ebook_sidecar_preferred_format: 'epub',
@@ -445,6 +449,83 @@ describe('processSearchEbook', () => {
     expect(result.source).toBe('annas_archive');
     expect(libgenScraperMock.searchLibgen).toHaveBeenCalled(); // tried first
     expect(ebookScraperMock.searchByAsin).toHaveBeenCalled(); // then Anna's
+  });
+
+  // ==================== F6: quality-gate reject → edition-level re-selection ====================
+
+  it('skips a blocklisted Libgen edition (by md5) and picks the next-best one', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.create.mockResolvedValue({ id: 'dh-f6' });
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_libgen_enabled: 'true',
+      ebook_libgen_priority: '10',
+      ebook_annas_archive_enabled: 'false',
+      ebook_indexer_search_enabled: 'false',
+    });
+
+    // Edition 1 was rejected by the quality gate (blocklisted by md5).
+    prismaMock.blockedRelease.findMany.mockResolvedValue([
+      { releaseKey: 'book - author.epub', releaseHash: 'lgmd5-scan' },
+    ]);
+    libgenScraperMock.searchLibgen.mockResolvedValue([
+      { md5: 'lgmd5-scan', title: 'Book (scanned)', author: 'Author', format: 'epub', sizeBytes: 9000000, language: 'English', collection: 'l', adsUrl: 'https://libgen.bz/ads.php?md5=lgmd5-scan', score: 95 },
+      { md5: 'lgmd5-clean', title: 'Book (retail)', author: 'Author', format: 'epub', sizeBytes: 1048576, language: 'English', collection: 'l', adsUrl: 'https://libgen.bz/ads.php?md5=lgmd5-clean', score: 90 },
+    ]);
+
+    const { processSearchEbook } = await import('@/lib/processors/search-ebook.processor');
+    const result = await processSearchEbook({
+      requestId: 'req-f6',
+      audiobook: { id: 'ab-f6', title: 'Book', author: 'Author', asin: 'BF6ASIN' },
+      jobId: 'job-f6',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.source).toBe('libgen');
+    // The download was queued for the CLEAN edition, not the blocklisted best-scorer.
+    expect(jobQueueMock.addStartDirectDownloadJob).toHaveBeenCalledWith(
+      'req-f6',
+      'dh-f6',
+      'https://libgen.bz/ads.php?md5=lgmd5-clean',
+      expect.any(String),
+      1048576,
+      'libgen',
+      'epub'
+    );
+    // And the history row carries the edition md5 for any future gate reject.
+    expect(prismaMock.downloadHistory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ torrentHash: 'lgmd5-clean' }),
+    });
+  });
+
+  it("skips Anna's Archive entirely when its single resolved md5 is blocklisted", async () => {
+    prismaMock.request.update.mockResolvedValue({});
+
+    setConfig({
+      ebook_sidecar_preferred_format: 'epub',
+      ebook_sidecar_base_url: 'https://annas-archive.gl',
+      ebook_annas_archive_enabled: 'true',
+      ebook_indexer_search_enabled: 'false',
+    });
+
+    prismaMock.blockedRelease.findMany.mockResolvedValue([
+      { releaseKey: 'irrelevant', releaseHash: 'annasmd5' },
+    ]);
+    ebookScraperMock.searchByAsin.mockResolvedValue('annasmd5');
+
+    const { processSearchEbook } = await import('@/lib/processors/search-ebook.processor');
+    const result = await processSearchEbook({
+      requestId: 'req-f6a',
+      audiobook: { id: 'ab-f6a', title: 'Book', author: 'Author', asin: 'BF6ASIN' },
+      jobId: 'job-f6a',
+    });
+
+    // Blocked hit = source has nothing new → no download links fetched, no grab.
+    expect(ebookScraperMock.getSlowDownloadLinks).not.toHaveBeenCalled();
+    expect(jobQueueMock.addStartDirectDownloadJob).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
   });
 
   it('lists all enabled sources (incl. Libgen) in the no-results message', async () => {

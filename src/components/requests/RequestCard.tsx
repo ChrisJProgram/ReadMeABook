@@ -39,6 +39,8 @@ interface RequestCardProps {
       /** D6: measured at import by ffprobe — actual, not the implied figure. */
       actualKbps?: number | null;
       audioChannels?: number | null;
+      /** F6: quality-gate findings persisted at import (flag mode). */
+      ebookQualityNotes?: string | null;
     };
   };
   showActions?: boolean;
@@ -182,6 +184,16 @@ export function RequestCard({ request, showActions = true }: RequestCardProps) {
                 Ebook
               </span>
             )}
+            {/* F6: quality-gate flags persisted at import (flag mode) — e.g.
+                "possibly scanned pages (…); no chapter TOC". Hover for detail. */}
+            {isEbook && request.audiobook.ebookQualityNotes ? (
+              <span
+                title={request.audiobook.ebookQualityNotes}
+                className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300"
+              >
+                ⚠ quality: {request.audiobook.ebookQualityNotes.split(';')[0]}
+              </span>
+            ) : null}
             {/* D6: ACTUAL bitrate measured from the imported stream — labelled
                 distinctly from the pre-download "implied" figure. */}
             {!isEbook && request.audiobook.actualKbps ? (

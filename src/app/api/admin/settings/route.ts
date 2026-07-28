@@ -162,6 +162,8 @@ export async function GET(request: NextRequest) {
         autoGrabEnabled: configMap.get('ebook_auto_grab_enabled') !== 'false',
         // Kindle compatibility fixes: default false
         kindleFixEnabled: configMap.get('ebook_kindle_fix_enabled') === 'true',
+        // F6: quality gate action (off | flag | reject); default flag
+        qualityGate: configMap.get('ebook_quality_gate') || 'flag',
       },
       general: {
         appName: configMap.get('app_name') || 'ReadMeABook',

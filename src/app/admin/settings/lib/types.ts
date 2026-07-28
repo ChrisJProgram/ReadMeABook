@@ -144,6 +144,8 @@ export interface EbookSettings {
   autoGrabEnabled: boolean;
   // Kindle compatibility
   kindleFixEnabled: boolean;
+  // F6: quality gate action (off | flag | reject)
+  qualityGate: string;
 }
 
 /**

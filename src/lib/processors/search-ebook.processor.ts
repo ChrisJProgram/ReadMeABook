@@ -80,7 +80,7 @@ export async function processSearchEbook(payload: SearchEbookPayload): Promise<a
     for (const src of sourceOrder.ordered) {
       if (src.id === 'libgen') {
         logger.info(`Searching Libgen (priority ${src.priority})...`);
-        const libgenResult = await searchLibgenSource(searchAudiobook, preferredFormat, logger);
+        const libgenResult = await searchLibgenSource(requestId, searchAudiobook, preferredFormat, logger);
         if (libgenResult) {
           logger.info(`Found ebook via Libgen (score: ${libgenResult.score})`);
           return await handleLibgenDownload(requestId, audiobook, libgenResult, preferredFormat, logger);
@@ -96,7 +96,7 @@ export async function processSearchEbook(payload: SearchEbookPayload): Promise<a
         logger.info(`No results from indexer search`);
       } else if (src.id === 'annas_archive') {
         logger.info(`Searching Anna's Archive (priority ${src.priority})...`);
-        const annasArchiveResult = await searchAnnasArchive(searchAudiobook, preferredFormat, logger);
+        const annasArchiveResult = await searchAnnasArchive(requestId, searchAudiobook, preferredFormat, logger);
         if (annasArchiveResult) {
           logger.info(`Found ebook via Anna's Archive (score: ${annasArchiveResult.score})`);
           return await handleAnnasArchiveDownload(requestId, audiobook, annasArchiveResult, preferredFormat, logger);
@@ -148,6 +148,7 @@ export async function processSearchEbook(payload: SearchEbookPayload): Promise<a
  * Search Anna's Archive for ebook
  */
 async function searchAnnasArchive(
+  requestId: string,
   audiobook: { title: string; author: string; asin?: string },
   preferredFormat: string,
   logger: RMABLogger
@@ -196,6 +197,17 @@ async function searchAnnasArchive(
     return null;
   }
 
+  // F6: skip a release this request has already blocklisted (e.g. rejected by
+  // the quality gate) — Anna's resolves ONE md5, so a blocked hit means this
+  // source has nothing new and the loop falls through to the next source.
+  const { kept } = await filterBlockedResults(requestId, [
+    { title: `${audiobook.title} - ${audiobook.author}.${preferredFormat}`, infoHash: md5 },
+  ]);
+  if (kept.length === 0) {
+    logger.info(`Anna's Archive hit ${md5} is blocklisted for this request — skipping source`);
+    return null;
+  }
+
   // Get slow download links
   const slowLinks = await getSlowDownloadLinks(md5, baseUrl, logger, flaresolverrUrl);
 
@@ -223,6 +235,7 @@ async function searchAnnasArchive(
  * real file URL at download time).
  */
 async function searchLibgenSource(
+  requestId: string,
   audiobook: { title: string; author: string },
   preferredFormat: string,
   logger: RMABLogger
@@ -248,7 +261,22 @@ async function searchLibgenSource(
     return null;
   }
 
-  const best = results[0];
+  // F6: drop editions this request has blocklisted (quality-gate rejects carry
+  // the md5 as releaseHash), then take the best remaining — the edition-level
+  // convergence loop: reject → re-search → NEXT edition, bounded by supply.
+  const { kept, blockedCount } = await filterBlockedResults(
+    requestId,
+    results.map((r) => ({ ...r, infoHash: r.md5 }))
+  );
+  if (blockedCount > 0) {
+    logger.info(`Skipped ${blockedCount} blocklisted Libgen edition(s) for this request`);
+  }
+  if (kept.length === 0) {
+    logger.warn(`All ${results.length} Libgen edition(s) are blocklisted for this request — skipping source`);
+    return null;
+  }
+
+  const best = kept[0];
   return {
     md5: best.md5,
     title: audiobook.title,
@@ -492,6 +520,7 @@ async function handleAnnasArchiveDownload(
       requestId,
       indexerName: "Anna's Archive",
       torrentName: `${audiobook.title} - ${audiobook.author}.${preferredFormat}`,
+      torrentHash: result.md5, // F6: edition identity — lets a quality-gate reject blocklist THIS edition
       torrentSizeBytes: null, // Unknown until download starts
       qualityScore: result.score,
       selected: true,
@@ -565,6 +594,7 @@ async function handleLibgenDownload(
       requestId,
       indexerName: 'Libgen',
       torrentName: `${audiobook.title} - ${audiobook.author}.${format}`,
+      torrentHash: result.md5, // F6: edition identity — lets a quality-gate reject blocklist THIS edition
       torrentSizeBytes: result.fileSize ? BigInt(result.fileSize) : null,
       qualityScore: result.score,
       selected: true,

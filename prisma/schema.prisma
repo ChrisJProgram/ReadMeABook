@@ -200,6 +200,10 @@ model Audiobook {
   actualKbps    Int? @map("actual_kbps")
   audioChannels Int? @map("audio_channels")
 
+  // F6: ebook quality-gate findings persisted at import (flag mode) — e.g.
+  // "possibly scanned pages (…); no chapter TOC (0 entries)". Null = clean/unchecked.
+  ebookQualityNotes String? @map("ebook_quality_notes") @db.Text
+
   // Plex integration (populated after successful import)
   plexGuid      String? @map("plex_guid") // Set when imported into Plex
   plexLibraryId String? @map("plex_library_id")

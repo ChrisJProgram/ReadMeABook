@@ -92,6 +92,7 @@ export function useEbookSettings({ ebook, onChange, onSuccess, onError, markAsSa
           flaresolverrUrl: ebook.flaresolverrUrl || '',
           autoGrabEnabled: ebook.autoGrabEnabled ?? true,
           kindleFixEnabled: ebook.kindleFixEnabled ?? false,
+          qualityGate: ebook.qualityGate || 'flag',
         }),
       });
 
