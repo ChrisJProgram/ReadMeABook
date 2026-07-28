@@ -25,6 +25,8 @@ export interface CreateRequestInput {
   narrator?: string;
   description?: string;
   coverArtUrl?: string;
+  /** F0: runtime from the Audible search payload, persisted for implied-bitrate. */
+  durationMinutes?: number;
 }
 
 export interface CreateRequestOptions {
@@ -103,6 +105,8 @@ export async function createRequestForUser(
   let seriesPart: string | undefined;
   let seriesAsin: string | undefined;
   let releaseDate: Date | null = null;
+  // F0: prefer the runtime the client already had (search payload carries it)
+  let runtimeMinutes: number | undefined = audiobook.durationMinutes;
   try {
     const audibleService = getAudibleService();
     const audnexusData = await audibleService.getAudiobookDetails(audiobook.asin);
@@ -124,6 +128,10 @@ export async function createRequestForUser(
     if (audnexusData?.series) series = audnexusData.series;
     if (audnexusData?.seriesPart) seriesPart = audnexusData.seriesPart;
     if (audnexusData?.seriesAsin) seriesAsin = audnexusData.seriesAsin;
+    // F0: fill runtime from Audnexus when the caller didn't supply it
+    if (!runtimeMinutes && audnexusData?.durationMinutes) {
+      runtimeMinutes = audnexusData.durationMinutes;
+    }
   } catch (error) {
     logger.warn(`Failed to fetch Audnexus data for ASIN ${audiobook.asin}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -146,6 +154,7 @@ export async function createRequestForUser(
         series,
         seriesPart,
         seriesAsin,
+        runtimeMinutes,
         status: 'requested',
       },
     });
@@ -160,6 +169,8 @@ export async function createRequestForUser(
     if (series) updates.series = series;
     if (seriesPart) updates.seriesPart = seriesPart;
     if (seriesAsin) updates.seriesAsin = seriesAsin;
+    // F0: backfill runtime on rows created before the column existed
+    if (runtimeMinutes && !audiobookRecord.runtimeMinutes) updates.runtimeMinutes = runtimeMinutes;
 
     if (Object.keys(updates).length > 0) {
       audiobookRecord = await prisma.audiobook.update({

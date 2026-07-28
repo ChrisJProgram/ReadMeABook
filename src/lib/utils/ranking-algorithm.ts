@@ -81,6 +81,21 @@ export interface RankedTorrent extends TorrentResult {
   finalScore: number;         // score + bonusPoints
   rank: number;
   breakdown: ScoreBreakdown;
+  /** F1: implied total bitrate (size / runtime); null when runtime is unknown.
+   *  "Implied" and "total" are load-bearing — channel count is unknowable
+   *  pre-download, so this is NOT a per-channel figure. Optional so existing
+   *  fixtures and the ebook ranker (which never sets it) stay valid. */
+  impliedKbps?: number | null;
+}
+
+/**
+ * F1: implied total bitrate in kbps from file size and book runtime.
+ * impliedKbps = size_bytes * 8 / (runtime_minutes * 60) / 1000
+ * Validated against a known file: declared 125 kbps vs implied 127 (~2% container overhead).
+ */
+export function impliedKbps(sizeBytes: number, runtimeMinutes: number | undefined | null): number | null {
+  if (!runtimeMinutes || runtimeMinutes <= 0 || !sizeBytes || sizeBytes <= 0) return null;
+  return Math.round((sizeBytes * 8) / (runtimeMinutes * 60) / 1000);
 }
 
 export interface EbookScoreBreakdown {
@@ -188,6 +203,7 @@ export class RankingAlgorithm {
         bonusPoints,
         finalScore,
         rank: 0, // Will be assigned after sorting
+        impliedKbps: impliedKbps(torrent.size, audiobook.durationMinutes), // F1
         breakdown: {
           formatScore,
           sizeScore,
@@ -749,6 +765,15 @@ export class RankingAlgorithm {
     if (runtimeMinutes && runtimeMinutes > 0) {
       const sizeMB = torrent.size / (1024 * 1024);
       const mbPerMin = sizeMB / runtimeMinutes;
+      const kbps = impliedKbps(torrent.size, runtimeMinutes);
+
+      // F1: a candidate implying an absurd bitrate is usually a LONGER release
+      // (unabridged vs abridged, different narrator/edition), not a better
+      // encode — without this note it reads as "Premium quality" and misleads.
+      // FLAC legitimately reaches these figures, so lossless is exempt.
+      if (kbps !== null && kbps > 320 && format !== 'FLAC') {
+        notes.push(`⚠️ Possible different edition (~${kbps} kbps implied is far above lossy norms — likely a longer/different recording, verify before preferring)`);
+      }
 
       if (mbPerMin >= 1.5) {
         notes.push('✓ Premium quality (high bitrate)');

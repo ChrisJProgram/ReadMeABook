@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, AuthenticatedRequest } from '@/lib/middleware/auth';
+import { prisma } from '@/lib/db';
 import { getProwlarrService } from '@/lib/integrations/prowlarr.service';
 import { rankTorrents } from '@/lib/utils/ranking-algorithm';
 import { groupIndexersByCategories, getGroupDescription } from '@/lib/utils/indexer-grouping';
@@ -120,15 +121,37 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Fetch runtime from Audnexus if ASIN provided (for size-based scoring/filtering)
+      // F0: resolve runtime — persisted audiobook row first, then AudibleCache,
+      // then live Audnexus (persisting any remote hit back if a row exists).
       let durationMinutes: number | undefined;
       if (asin) {
-        const { getAudibleService } = await import('@/lib/integrations/audible.service');
-        const audibleService = getAudibleService();
-        const runtime = await audibleService.getRuntime(asin);
-        if (runtime) {
-          durationMinutes = runtime;
-          logger.info(`Fetched runtime: ${runtime} minutes for ASIN ${asin}`);
+        const bookRow = await prisma.audiobook.findFirst({
+          where: { audibleAsin: asin },
+          select: { id: true, runtimeMinutes: true },
+        });
+        if (bookRow?.runtimeMinutes) {
+          durationMinutes = bookRow.runtimeMinutes;
+        }
+        if (!durationMinutes) {
+          const cached = await prisma.audibleCache.findUnique({
+            where: { asin },
+            select: { durationMinutes: true },
+          });
+          if (cached?.durationMinutes) durationMinutes = cached.durationMinutes;
+        }
+        if (!durationMinutes) {
+          const { getAudibleService } = await import('@/lib/integrations/audible.service');
+          const audibleService = getAudibleService();
+          const runtime = await audibleService.getRuntime(asin);
+          if (runtime) durationMinutes = runtime;
+        }
+        if (durationMinutes) {
+          logger.info(`Runtime: ${durationMinutes} minutes for ASIN ${asin}`);
+          if (bookRow && !bookRow.runtimeMinutes) {
+            await prisma.audiobook
+              .update({ where: { id: bookRow.id }, data: { runtimeMinutes: durationMinutes } })
+              .catch(() => {}); // best-effort backfill
+          }
         } else {
           logger.debug(`No runtime found for ASIN ${asin}`);
         }

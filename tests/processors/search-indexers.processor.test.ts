@@ -28,8 +28,9 @@ vi.mock('@/lib/integrations/prowlarr.service', () => ({
   getProwlarrService: () => prowlarrMock,
 }));
 
+const getRuntimeMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/integrations/audible.service', () => ({
-  getAudibleService: () => ({ getRuntime: vi.fn().mockResolvedValue(null) }),
+  getAudibleService: () => ({ getRuntime: getRuntimeMock }),
 }));
 
 describe('processSearchIndexers', () => {
@@ -38,6 +39,13 @@ describe('processSearchIndexers', () => {
     configMock.getAudibleRegion.mockResolvedValue('us');
     // Default to empty blocklist so the filter is a no-op unless a test overrides.
     prismaMock.blockedRelease.findMany.mockResolvedValue([]);
+    // F0/F1 defaults: the audiobook row already knows its runtime, so legacy
+    // scenarios proceed to search instead of tripping the unknown-runtime hold.
+    // Hold-specific tests override findUnique with null.
+    prismaMock.audiobook.findUnique.mockResolvedValue({ runtimeMinutes: 600 });
+    prismaMock.audiobook.update.mockResolvedValue({});
+    prismaMock.audibleCache.findUnique.mockResolvedValue(null);
+    getRuntimeMock.mockResolvedValue(null);
   });
 
   it('marks request awaiting_search when no results found', async () => {
@@ -297,6 +305,217 @@ describe('processSearchIndexers', () => {
       })
     );
     expect(jobQueueMock.addDownloadJob).not.toHaveBeenCalled();
+  });
+
+  // ================= F0/F1: runtime resolution, hold, floor =================
+
+  const indexerConfig = (extra: Record<string, string | null> = {}) =>
+    configMock.get.mockImplementation(async (key: string) => {
+      if (key === 'prowlarr_indexers') {
+        return JSON.stringify([{ id: 1, name: 'Indexer', protocol: 'torrent', priority: 10, categories: [3030] }]);
+      }
+      if (key === 'indexer_flag_config') return JSON.stringify([]);
+      if (key in extra) return extra[key];
+      return null;
+    });
+
+  const candidate = (sizeMB: number, title = 'Book - Author') => ({
+    indexer: 'Indexer',
+    indexerId: 1,
+    title,
+    size: sizeMB * 1024 * 1024,
+    seeders: 10,
+    publishDate: new Date(),
+    downloadUrl: 'magnet:?xt=urn:btih:abc',
+    guid: `guid-${sizeMB}`,
+    format: 'M4B',
+  });
+
+  describe('F1 (D5): unknown-runtime hold', () => {
+    it('holds for manual selection without touching the indexers', async () => {
+      indexerConfig();
+      prismaMock.audiobook.findUnique.mockResolvedValue(null); // no persisted runtime
+      prismaMock.audibleCache.findUnique.mockResolvedValue(null);
+      getRuntimeMock.mockResolvedValue(null); // Audnexus gap
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-hold',
+        audiobook: { id: 'a-hold', title: 'Obscure Book', author: 'Author', asin: 'B0UNKNOWN0' },
+        jobId: 'job-hold',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/held for manual selection/i);
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'awaiting_search',
+            errorMessage: expect.stringContaining('held for manual selection'),
+          }),
+        })
+      );
+      // The whole point of holding early: no indexer traffic, no grab.
+      expect(prowlarrMock.searchWithVariations).not.toHaveBeenCalled();
+      expect(jobQueueMock.addDownloadJob).not.toHaveBeenCalled();
+    });
+
+    it('proceeds with unknown runtime when the hold is disabled', async () => {
+      indexerConfig({ audiobook_hold_unknown_runtime: 'false' });
+      prismaMock.audiobook.findUnique.mockResolvedValue(null);
+      getRuntimeMock.mockResolvedValue(null);
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(50)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-nohold',
+        audiobook: { id: 'a-nohold', title: 'Book', author: 'Author', asin: 'B0UNKNOWN1' },
+        jobId: 'job-nohold',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalled();
+    });
+  });
+
+  describe('F0: runtime resolution chain', () => {
+    it('uses the persisted row without consulting cache or Audnexus', async () => {
+      indexerConfig();
+      prismaMock.audiobook.findUnique.mockResolvedValue({ runtimeMinutes: 600 });
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(700)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-row',
+        audiobook: { id: 'a-row', title: 'Book', author: 'Author', asin: 'B0KNOWN000' },
+        jobId: 'job-row',
+      });
+
+      expect(result.success).toBe(true);
+      expect(prismaMock.audibleCache.findUnique).not.toHaveBeenCalled();
+      expect(getRuntimeMock).not.toHaveBeenCalled();
+      // Row already had runtime — no backfill write.
+      expect(prismaMock.audiobook.update).not.toHaveBeenCalled();
+    });
+
+    it('falls back to AudibleCache and persists the backfill', async () => {
+      indexerConfig();
+      prismaMock.audiobook.findUnique.mockResolvedValue({ runtimeMinutes: null });
+      prismaMock.audibleCache.findUnique.mockResolvedValue({ durationMinutes: 480 });
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(500)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-cache',
+        audiobook: { id: 'a-cache', title: 'Book', author: 'Author', asin: 'B0CACHED00' },
+        jobId: 'job-cache',
+      });
+
+      expect(result.success).toBe(true);
+      expect(getRuntimeMock).not.toHaveBeenCalled(); // cache beat the live call
+      expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'a-cache' },
+          data: { runtimeMinutes: 480 },
+        })
+      );
+    });
+
+    it('falls back to live Audnexus last and persists the backfill', async () => {
+      indexerConfig();
+      prismaMock.audiobook.findUnique.mockResolvedValue(null);
+      prismaMock.audibleCache.findUnique.mockResolvedValue(null);
+      getRuntimeMock.mockResolvedValue(720);
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(800)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-live',
+        audiobook: { id: 'a-live', title: 'Book', author: 'Author', asin: 'B0LIVE0000' },
+        jobId: 'job-live',
+      });
+
+      expect(result.success).toBe(true);
+      expect(getRuntimeMock).toHaveBeenCalledWith('B0LIVE0000');
+      expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { runtimeMinutes: 720 } })
+      );
+    });
+  });
+
+  describe('F1 (D1/D2): implied-bitrate floor', () => {
+    // 600 min runtime: 50 MB ≈ 12 kbps implied; 700 MB ≈ 163 kbps implied.
+
+    it('is OFF by default — low implied bitrate still grabs', async () => {
+      indexerConfig();
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(50)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-nofloor',
+        audiobook: { id: 'a-nofloor', title: 'Book', author: 'Author', asin: 'B0FLOOR000' },
+        jobId: 'job-nofloor',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalled();
+    });
+
+    it('fails visibly when nothing clears an enabled floor (D2)', async () => {
+      indexerConfig({ audiobook_min_implied_kbps: '100' });
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(50)]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-floor-fail',
+        audiobook: { id: 'a-floor-fail', title: 'Book', author: 'Author', asin: 'B0FLOOR001' },
+        jobId: 'job-floor-fail',
+      });
+
+      expect(result.success).toBe(false);
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'awaiting_search',
+            errorMessage: expect.stringContaining('bitrate floor'),
+          }),
+        })
+      );
+      // The reason must carry the best implied figure, or the failure is
+      // indistinguishable from "book doesn't exist".
+      const updateCall = prismaMock.request.update.mock.calls.find(
+        (c: any[]) => c[0]?.data?.errorMessage?.includes?.('bitrate floor')
+      );
+      expect(updateCall[0].data.errorMessage).toMatch(/best candidate ~\d+ kbps/);
+      expect(jobQueueMock.addDownloadJob).not.toHaveBeenCalled();
+    });
+
+    it('grabs the release that clears the floor', async () => {
+      indexerConfig({ audiobook_min_implied_kbps: '100' });
+      prowlarrMock.searchWithVariations.mockResolvedValue([candidate(50), candidate(700, 'Book - Author [700]')]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-floor-pass',
+        audiobook: { id: 'a-floor-pass', title: 'Book', author: 'Author', asin: 'B0FLOOR002' },
+        jobId: 'job-floor-pass',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-floor-pass',
+        expect.anything(),
+        expect.objectContaining({ title: 'Book - Author [700]' })
+      );
+    });
   });
 });
 

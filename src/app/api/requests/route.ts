@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
         narrator: audiobook.narrator,
         description: audiobook.description,
         coverArtUrl: audiobook.coverArtUrl,
+        durationMinutes: audiobook.durationMinutes, // F0: persist runtime
       }, { skipAutoSearch, bypassIgnore: true });
 
       if (!result.success) {

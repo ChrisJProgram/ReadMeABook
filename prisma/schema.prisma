@@ -182,6 +182,11 @@ model Audiobook {
   seriesPart  String? @map("series_part") // Series position (e.g., "1", "1.5", "Book 1")
   seriesAsin  String? @map("series_asin") // Audible series ASIN for linking to series detail page
 
+  // F0: book runtime, persisted so implied bitrate (size / runtime) can be
+  // computed at selection time and shown in the UI without a live Audnexus
+  // fetch on every search. Sources: search payload -> AudibleCache -> Audnexus.
+  runtimeMinutes Int? @map("runtime_minutes")
+
   // Request tracking
   status String @default("requested") // requested, downloading, processing, completed, failed
 

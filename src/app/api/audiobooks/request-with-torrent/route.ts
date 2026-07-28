@@ -121,6 +121,7 @@ export async function POST(request: NextRequest) {
       let year: number | undefined;
       let series: string | undefined;
       let seriesPart: string | undefined;
+      let runtimeMinutes: number | undefined; // F0
       try {
         const audibleService = getAudibleService();
         const audnexusData = await audibleService.getAudiobookDetails(audiobook.asin);
@@ -146,6 +147,9 @@ export async function POST(request: NextRequest) {
           seriesPart = audnexusData.seriesPart;
           logger.debug(`Extracted seriesPart: ${seriesPart}`);
         }
+        if (audnexusData?.durationMinutes) {
+          runtimeMinutes = audnexusData.durationMinutes; // F0
+        }
       } catch (error) {
         logger.warn(`Failed to fetch Audnexus data for ASIN ${audiobook.asin}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
@@ -168,11 +172,12 @@ export async function POST(request: NextRequest) {
             year,
             series,
             seriesPart,
+            runtimeMinutes, // F0
             status: 'requested',
           },
         });
         logger.debug(`Created audiobook ${audiobookRecord.id} with year: ${year || 'none'}, series: ${series || 'none'}`);
-      } else if (year || series || seriesPart) {
+      } else if (year || series || seriesPart || runtimeMinutes) {
         // Always update year/series if we have them from Audnexus (even if audiobook already has them)
         audiobookRecord = await prisma.audiobook.update({
           where: { id: audiobookRecord.id },
@@ -180,6 +185,8 @@ export async function POST(request: NextRequest) {
             ...(year && { year }),
             ...(series && { series }),
             ...(seriesPart && { seriesPart }),
+            // F0: backfill only — don't overwrite an existing value
+            ...(runtimeMinutes && !audiobookRecord.runtimeMinutes && { runtimeMinutes }),
           },
         });
         logger.debug(`Updated audiobook ${audiobookRecord.id} with year: ${year || 'unchanged'}, series: ${series || 'unchanged'}`);

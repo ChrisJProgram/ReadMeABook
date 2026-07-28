@@ -7,6 +7,7 @@ import { SearchIndexersPayload, getJobQueueService } from '../services/job-queue
 import { prisma } from '../db';
 import { getProwlarrService } from '../integrations/prowlarr.service';
 import { getRankingAlgorithm } from '../utils/ranking-algorithm';
+import { impliedKbps } from '../utils/ranking-algorithm';
 import { groupIndexersByCategories, getGroupDescription } from '../utils/indexer-grouping';
 import { RMABLogger } from '../utils/logger';
 import { getLanguageForRegion } from '../constants/language-config';
@@ -45,6 +46,84 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
     // Get enabled indexers from configuration
     const { getConfigService } = await import('../services/config.service');
     const configService = getConfigService();
+
+    // ============ F0: resolve runtime (persisted → cache → live) ============
+    // Persisted audiobook row first, then AudibleCache, then a live Audnexus
+    // call; any remote hit is written back onto the row so the next search
+    // (and the UI) never refetches.
+    let durationMinutes: number | undefined;
+    let runtimeSource = 'none';
+
+    const bookRow = await prisma.audiobook.findUnique({
+      where: { id: audiobook.id },
+      select: { runtimeMinutes: true },
+    });
+    if (bookRow?.runtimeMinutes) {
+      durationMinutes = bookRow.runtimeMinutes;
+      runtimeSource = 'audiobook row';
+    }
+    if (!durationMinutes && audiobook.asin) {
+      const cached = await prisma.audibleCache.findUnique({
+        where: { asin: audiobook.asin },
+        select: { durationMinutes: true },
+      });
+      if (cached?.durationMinutes) {
+        durationMinutes = cached.durationMinutes;
+        runtimeSource = 'AudibleCache';
+      }
+    }
+    if (!durationMinutes && audiobook.asin) {
+      const { getAudibleService } = await import('../integrations/audible.service');
+      const audibleService = getAudibleService();
+      const runtime = await audibleService.getRuntime(audiobook.asin);
+      if (runtime) {
+        durationMinutes = runtime;
+        runtimeSource = 'Audnexus';
+      }
+    }
+
+    if (durationMinutes) {
+      logger.info(`Runtime: ${durationMinutes} min (source: ${runtimeSource})`);
+      if (!bookRow?.runtimeMinutes) {
+        // Best-effort backfill — a write failure must not fail the search
+        await prisma.audiobook
+          .update({ where: { id: audiobook.id }, data: { runtimeMinutes: durationMinutes } })
+          .catch((e) => logger.debug(`Runtime backfill failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    }
+
+    // ============ F1 (D5): unknown runtime → hold for manual pick ============
+    // Implied bitrate can't be computed for ANY release of this book, so the
+    // AUTOMATIC path never grabs. Interactive search / user-picked releases are
+    // unaffected (they don't run through this processor). The normal re-search
+    // cadence keeps retrying, so if Audnexus later learns the runtime the
+    // request resumes on its own. Placed BEFORE the Prowlarr search so a held
+    // request doesn't hammer the indexers every cycle.
+    const holdConfig = await configService.get('audiobook_hold_unknown_runtime');
+    const holdUnknownRuntime = holdConfig !== 'false'; // default ON
+    if (!durationMinutes && holdUnknownRuntime) {
+      const errorMessage =
+        'Runtime unknown — held for manual selection (implied bitrate cannot be computed). ' +
+        'Pick a release via interactive search, or set audiobook_hold_unknown_runtime=false to allow automatic grabs.';
+      logger.warn(`${errorMessage} [request ${requestId}]`);
+
+      await prisma.request.update({
+        where: { id: requestId },
+        data: {
+          status: 'awaiting_search',
+          errorMessage,
+          lastSearchAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+
+      return {
+        success: false,
+        message: 'Runtime unknown, held for manual selection',
+        requestId,
+      };
+    }
+
     const indexersConfigStr = await configService.get('prowlarr_indexers');
 
     if (!indexersConfigStr) {
@@ -149,20 +228,6 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       };
     }
 
-    // Fetch runtime from Audnexus if ASIN available (for size-based scoring/filtering)
-    let durationMinutes: number | undefined;
-    if (audiobook.asin) {
-      const { getAudibleService } = await import('../integrations/audible.service');
-      const audibleService = getAudibleService();
-      const runtime = await audibleService.getRuntime(audiobook.asin);
-      if (runtime) {
-        durationMinutes = runtime;
-        logger.info(`Fetched runtime: ${runtime} minutes for ASIN ${audiobook.asin}`);
-      } else {
-        logger.debug(`No runtime found for ASIN ${audiobook.asin}`);
-      }
-    }
-
     // Log filter info
     const sizeMBThreshold = 20;
     const preFilterCount = searchResults.length;
@@ -235,15 +300,65 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       };
     }
 
+    // ============ F1 (D1/D2): optional implied-bitrate floor ============
+    // Off unless audiobook_min_implied_kbps is set. When enabled and nothing
+    // clears it, FAIL VISIBLY (a floor means a floor — no best-effort grabs);
+    // the normal re-search cadence retries. Runtime-unknown books never reach
+    // here when the hold is on; if the hold is off, the floor is skipped for
+    // them (nothing to measure).
+    const floorConfigStr = await configService.get('audiobook_min_implied_kbps');
+    const minImpliedKbps = floorConfigStr ? parseInt(floorConfigStr, 10) : 0;
+    let selectableResults = filteredResults;
+
+    if (minImpliedKbps > 0 && durationMinutes) {
+      selectableResults = filteredResults.filter((result) => {
+        const kbps = impliedKbps(result.size, durationMinutes);
+        return kbps === null || kbps >= minImpliedKbps;
+      });
+
+      const dropped = filteredResults.length - selectableResults.length;
+      if (dropped > 0) {
+        logger.info(`Bitrate floor ${minImpliedKbps} kbps: excluded ${dropped} release(s) below it`);
+      }
+
+      if (selectableResults.length === 0) {
+        const bestKbps = Math.max(
+          ...filteredResults.map((result) => impliedKbps(result.size, durationMinutes) ?? 0)
+        );
+        const errorMessage =
+          `No release met the bitrate floor (${minImpliedKbps} kbps implied) — ` +
+          `best candidate ~${bestKbps} kbps. Will retry automatically; ` +
+          `pick manually via interactive search or lower audiobook_min_implied_kbps.`;
+
+        logger.warn(`${errorMessage} [request ${requestId}]`);
+
+        await prisma.request.update({
+          where: { id: requestId },
+          data: {
+            status: 'awaiting_search',
+            errorMessage,
+            lastSearchAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+
+        return {
+          success: false,
+          message: 'No release met the bitrate floor, queued for re-search',
+          requestId,
+        };
+      }
+    }
+
     // Select best result
-    const bestResult = filteredResults[0];
+    const bestResult = selectableResults[0];
 
     // Log top 3 results with detailed breakdown
-    const top3 = filteredResults.slice(0, 3);
+    const top3 = selectableResults.slice(0, 3);
     logger.info(`==================== RANKING DEBUG ====================`);
     logger.info(`Ranking Title: "${effectiveSearchTitle}"${effectiveSearchTitle !== audiobook.title ? ` (audiobook: "${audiobook.title}")` : ''}`);
     logger.info(`Requested Author: "${audiobook.author}"`);
-    logger.info(`Top ${top3.length} results (out of ${filteredResults.length} above threshold):`);
+    logger.info(`Top ${top3.length} results (out of ${selectableResults.length} selectable${minImpliedKbps > 0 ? `, floor ${minImpliedKbps} kbps` : ''}):`);
     logger.info(`--------------------------------------------------------`);
     for (let i = 0; i < top3.length; i++) {
       const result = top3[i];
@@ -287,9 +402,9 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
 
     return {
       success: true,
-      message: `Found ${filteredResults.length} quality matches, selected best torrent`,
+      message: `Found ${selectableResults.length} quality matches, selected best torrent`,
       requestId,
-      resultsCount: filteredResults.length,
+      resultsCount: selectableResults.length,
       selectedTorrent: {
         title: bestResult.title,
         score: bestResult.score,

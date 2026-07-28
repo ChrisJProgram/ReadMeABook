@@ -711,6 +711,30 @@ function ResultRow({
             </>
           )}
 
+          {/* Implied bitrate (F1) — pre-download figure from size ÷ runtime.
+              number = shown; null = runtime unknown, shown as "—" per D5;
+              absent (ebook / Anna's Archive rows) = not rendered at all. */}
+          {result.impliedKbps !== undefined && (
+            <>
+              <span className="text-gray-300 dark:text-gray-600 select-none">&middot;</span>
+              {result.impliedKbps !== null ? (
+                <span
+                  title="Implied total bitrate = size ÷ book runtime. Channel count is unknown before download, so this is not a per-channel figure."
+                  className="px-1 py-px text-[10px] font-semibold rounded bg-teal-100 dark:bg-teal-500/15 text-teal-700 dark:text-teal-300"
+                >
+                  ~{result.impliedKbps} kbps
+                </span>
+              ) : (
+                <span
+                  title="Implied bitrate unavailable — this book's runtime is unknown (no Audnexus data)."
+                  className="px-1 py-px text-[10px] font-semibold rounded bg-gray-100 dark:bg-gray-500/15 text-gray-500 dark:text-gray-400"
+                >
+                  kbps —
+                </span>
+              )}
+            </>
+          )}
+
           {/* Format */}
           {displayFormat && (
             <>
