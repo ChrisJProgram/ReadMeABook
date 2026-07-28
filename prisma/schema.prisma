@@ -195,6 +195,11 @@ model Audiobook {
   fileFormat    String? @map("file_format") // m4b, m4a, mp3
   fileSizeBytes BigInt? @map("file_size_bytes")
 
+  // D6: ACTUAL figures measured by ffprobe at import — distinct from the
+  // pre-download implied kbps (size ÷ runtime). Channels enable per-channel.
+  actualKbps    Int? @map("actual_kbps")
+  audioChannels Int? @map("audio_channels")
+
   // Plex integration (populated after successful import)
   plexGuid      String? @map("plex_guid") // Set when imported into Plex
   plexLibraryId String? @map("plex_library_id")

@@ -248,12 +248,38 @@ export async function processOrganizeFiles(payload: OrganizeFilesPayload): Promi
       logger.info(`Generated files hash: ${filesHash.substring(0, 16)}... (${result.audioFiles.length} audio files)`);
     }
 
+    // D6: measure the ACTUAL bitrate/channels of what was imported. This is a
+    // different number from the pre-download implied kbps (total, size÷runtime)
+    // — here we read the real stream, and channels make per-channel possible.
+    // Best-effort: a probe failure must never fail the import. Probing the
+    // first file is representative — multi-part rips share one encode.
+    let actualKbps: number | null = null;
+    let audioChannels: number | null = null;
+    if (result.audioFiles.length > 0) {
+      try {
+        const { probeAudioFile } = await import('../utils/audio-probe');
+        const probe = await probeAudioFile(result.audioFiles[0]);
+        actualKbps = probe.kbps;
+        audioChannels = probe.channels;
+        if (actualKbps) {
+          const perCh = audioChannels ? Math.round(actualKbps / audioChannels) : null;
+          logger.info(
+            `Actual bitrate: ${actualKbps} kbps${audioChannels ? ` (${audioChannels}ch → ~${perCh} kbps/ch)` : ''}${probe.codec ? ` [${probe.codec}]` : ''}`
+          );
+        }
+      } catch (err) {
+        logger.warn(`Audio probe failed (non-fatal): ${err instanceof Error ? err.message : 'unknown'}`);
+      }
+    }
+
     // Update audiobook record with file path, hash, and status
     await prisma.audiobook.update({
       where: { id: audiobookId },
       data: {
         filePath: result.targetPath,
         filesHash: filesHash || null,
+        actualKbps,
+        audioChannels,
         status: 'completed',
         completedAt: new Date(),
         updatedAt: new Date(),

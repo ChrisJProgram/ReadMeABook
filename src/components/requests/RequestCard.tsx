@@ -36,6 +36,9 @@ interface RequestCardProps {
       coverArtUrl?: string;
       filePath?: string | null;
       fileFormat?: string | null;
+      /** D6: measured at import by ffprobe — actual, not the implied figure. */
+      actualKbps?: number | null;
+      audioChannels?: number | null;
     };
   };
   showActions?: boolean;
@@ -179,6 +182,19 @@ export function RequestCard({ request, showActions = true }: RequestCardProps) {
                 Ebook
               </span>
             )}
+            {/* D6: ACTUAL bitrate measured from the imported stream — labelled
+                distinctly from the pre-download "implied" figure. */}
+            {!isEbook && request.audiobook.actualKbps ? (
+              <span
+                title={`Measured from the imported audio stream (actual, not implied).${request.audiobook.audioChannels ? ` ${request.audiobook.audioChannels} channel(s) → ~${Math.round(request.audiobook.actualKbps / request.audiobook.audioChannels)} kbps per channel.` : ''}`}
+                className="px-2 py-0.5 text-xs font-medium rounded-full bg-teal-100 dark:bg-teal-500/15 text-teal-700 dark:text-teal-300"
+              >
+                {request.audiobook.actualKbps} kbps
+                {request.audiobook.audioChannels
+                  ? ` · ${request.audiobook.audioChannels}ch (~${Math.round(request.audiobook.actualKbps / request.audiobook.audioChannels)}/ch)`
+                  : ''}
+              </span>
+            ) : null}
             {isActive && request.progress > 0 && (
               <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
                 <div className="animate-pulse w-2 h-2 bg-blue-500 rounded-full"></div>

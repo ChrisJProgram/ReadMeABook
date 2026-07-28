@@ -8,6 +8,7 @@ import { prisma } from '../db';
 import { getProwlarrService } from '../integrations/prowlarr.service';
 import { getRankingAlgorithm } from '../utils/ranking-algorithm';
 import { impliedKbps } from '../utils/ranking-algorithm';
+import { buildTierMap, selectTopTier } from '../utils/indexer-tiers';
 import { groupIndexersByCategories, getGroupDescription } from '../utils/indexer-grouping';
 import { RMABLogger } from '../utils/logger';
 import { getLanguageForRegion } from '../constants/language-config';
@@ -349,6 +350,22 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
         };
       }
     }
+
+    // ============ F3: strict indexer tiers ============
+    // Optional per-indexer `tier` in prowlarr_indexers: every candidate from a
+    // lower-numbered tier is taken before ANY candidate from a later tier;
+    // scoring only orders candidates WITHIN a tier ("use ABB if it has it at
+    // all, otherwise MAM"). Untiered indexers act as the last tier. No tiers
+    // configured → weighted behaviour, untouched. Runs AFTER the bitrate floor
+    // so a floor miss in tier 1 correctly falls through to tier 2.
+    const tierMap = buildTierMap(indexersConfig);
+    const tierSelection = selectTopTier(selectableResults, tierMap);
+    if (tierSelection.deferred > 0) {
+      logger.info(
+        `Indexer tiers: tier ${tierSelection.tier} wins — ${tierSelection.deferred} candidate(s) from later tiers deferred`
+      );
+    }
+    selectableResults = tierSelection.selected;
 
     // Select best result
     const bestResult = selectableResults[0];

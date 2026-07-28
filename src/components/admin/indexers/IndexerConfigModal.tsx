@@ -27,6 +27,7 @@ interface IndexerConfigModalProps {
   };
   initialConfig?: {
     priority: number;
+    tier?: number | null; // F3: strict tier, lower wins; unset = untiered
     seedingTimeMinutes?: number;
     ratioLimit?: number;
     removeAfterProcessing?: boolean;
@@ -39,6 +40,7 @@ interface IndexerConfigModalProps {
     name: string;
     protocol: string;
     priority: number;
+    tier?: number; // F3
     seedingTimeMinutes?: number;
     ratioLimit?: number;
     removeAfterProcessing?: boolean;
@@ -72,6 +74,8 @@ export function IndexerConfigModal({
   const [priority, setPriority] = useState(
     initialConfig?.priority ?? defaults.priority
   );
+  // F3: '' = untiered (default); a positive integer joins strict tiering.
+  const [tier, setTier] = useState<number | ''>(initialConfig?.tier ?? '');
   const [seedingTimeMinutes, setSeedingTimeMinutes] = useState(
     initialConfig?.seedingTimeMinutes ?? defaults.seedingTimeMinutes
   );
@@ -105,6 +109,7 @@ export function IndexerConfigModal({
     if (isOpen) {
       if (mode === 'add') {
         setPriority(defaults.priority);
+        setTier(''); // F3: untiered by default
         setSeedingTimeMinutes(defaults.seedingTimeMinutes);
         setRatioLimit(defaults.ratioLimit);
         setRemoveAfterProcessing(defaults.removeAfterProcessing);
@@ -113,6 +118,7 @@ export function IndexerConfigModal({
         setEbookCategories(defaults.ebookCategories);
       } else {
         setPriority(initialConfig?.priority ?? defaults.priority);
+        setTier(initialConfig?.tier ?? ''); // F3
         setSeedingTimeMinutes(initialConfig?.seedingTimeMinutes ?? defaults.seedingTimeMinutes);
         setRatioLimit(initialConfig?.ratioLimit ?? defaults.ratioLimit);
         setRemoveAfterProcessing(initialConfig?.removeAfterProcessing ?? defaults.removeAfterProcessing);
@@ -158,6 +164,11 @@ export function IndexerConfigModal({
       audiobookCategories,
       ebookCategories,
     };
+
+    // F3: only persist a tier when one is set — absence means untiered.
+    if (tier !== '' && Number.isFinite(tier) && tier > 0) {
+      config.tier = tier;
+    }
 
     // Add protocol-specific fields
     if (isTorrent) {
@@ -256,6 +267,28 @@ export function IndexerConfigModal({
               {errors.priority}
             </p>
           )}
+        </div>
+
+        {/* Tier (F3) */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Tier (optional)
+          </label>
+          <Input
+            type="number"
+            min="1"
+            value={tier}
+            placeholder="No tier"
+            onChange={(e) => {
+              const parsed = parseInt(e.target.value, 10);
+              setTier(e.target.value === '' || isNaN(parsed) ? '' : Math.max(1, parsed));
+            }}
+          />
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Strict preference for automatic grabs: every release from tier 1 is
+            taken before any from tier 2, regardless of score. Leave empty to
+            keep normal weighted ranking (untiered indexers act as the last tier).
+          </p>
         </div>
 
         {/* Seeding Time + Ratio Limit (Torrents only) */}

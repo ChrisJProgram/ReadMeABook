@@ -517,6 +517,142 @@ describe('processSearchIndexers', () => {
       );
     });
   });
+
+  describe('F3: strict indexer tiers', () => {
+    const tieredConfig = () =>
+      configMock.get.mockImplementation(async (key: string) => {
+        if (key === 'prowlarr_indexers') {
+          return JSON.stringify([
+            { id: 1, name: 'AudiobookBay', protocol: 'torrent', priority: 25, tier: 1, categories: [3030] },
+            { id: 2, name: 'MyAnonamouse', protocol: 'torrent', priority: 20, tier: 2, categories: [3030] },
+          ]);
+        }
+        if (key === 'indexer_flag_config') return JSON.stringify([]);
+        return null;
+      });
+
+    const abb = () => ({
+      indexer: 'AudiobookBay',
+      indexerId: 1,
+      title: 'Book - Author [ABB]',
+      size: 700 * 1024 * 1024,
+      seeders: 1, // ABB publishes no counts; hardcoded 1
+      publishDate: new Date(),
+      downloadUrl: 'magnet:?xt=urn:btih:abb',
+      guid: 'guid-abb',
+      format: 'M4B',
+    });
+    const mam = () => ({
+      indexer: 'MyAnonamouse',
+      indexerId: 2,
+      title: 'Book - Author [MAM]',
+      size: 700 * 1024 * 1024,
+      seeders: 28, // scoring puts this first — the live failure F3 fixes
+      publishDate: new Date(),
+      downloadUrl: 'magnet:?xt=urn:btih:mam',
+      guid: 'guid-mam',
+      format: 'M4B',
+    });
+
+    it('grabs tier 1 (ABB) even though tier 2 (MAM) outscores it on seeders', async () => {
+      tieredConfig();
+      prowlarrMock.searchWithVariations.mockResolvedValue([mam(), abb()]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-tier',
+        audiobook: { id: 'a-tier', title: 'Book', author: 'Author', asin: 'B0TIER0000' },
+        jobId: 'job-tier',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-tier',
+        expect.anything(),
+        expect.objectContaining({ title: 'Book - Author [ABB]' })
+      );
+    });
+
+    it('falls through to tier 2 when tier 1 has no candidate', async () => {
+      tieredConfig();
+      prowlarrMock.searchWithVariations.mockResolvedValue([mam()]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-tier-fall',
+        audiobook: { id: 'a-tier-fall', title: 'Book', author: 'Author', asin: 'B0TIER0001' },
+        jobId: 'job-tier-fall',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-tier-fall',
+        expect.anything(),
+        expect.objectContaining({ title: 'Book - Author [MAM]' })
+      );
+    });
+
+    it('keeps weighted behaviour when no indexer has a tier', async () => {
+      indexerConfig(); // config without tier fields
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        { ...mam(), indexerId: 1 }, // same indexer id as config
+        { ...abb(), indexerId: 1 },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-untier',
+        audiobook: { id: 'a-untier', title: 'Book', author: 'Author', asin: 'B0TIER0002' },
+        jobId: 'job-untier',
+      });
+
+      expect(result.success).toBe(true);
+      // Weighted ranking wins: the 28-seeder release stays on top.
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-untier',
+        expect.anything(),
+        expect.objectContaining({ title: 'Book - Author [MAM]' })
+      );
+    });
+
+    it('tier 1 below an enabled floor falls through to a tier 2 that clears it', async () => {
+      configMock.get.mockImplementation(async (key: string) => {
+        if (key === 'prowlarr_indexers') {
+          return JSON.stringify([
+            { id: 1, name: 'AudiobookBay', protocol: 'torrent', priority: 25, tier: 1, categories: [3030] },
+            { id: 2, name: 'MyAnonamouse', protocol: 'torrent', priority: 20, tier: 2, categories: [3030] },
+          ]);
+        }
+        if (key === 'indexer_flag_config') return JSON.stringify([]);
+        if (key === 'audiobook_min_implied_kbps') return '100';
+        return null;
+      });
+      // ABB copy is tiny (~12 kbps implied), MAM copy clears the floor.
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        { ...abb(), size: 50 * 1024 * 1024 },
+        mam(),
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-tier-floor',
+        audiobook: { id: 'a-tier-floor', title: 'Book', author: 'Author', asin: 'B0TIER0003' },
+        jobId: 'job-tier-floor',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-tier-floor',
+        expect.anything(),
+        expect.objectContaining({ title: 'Book - Author [MAM]' })
+      );
+    });
+  });
+
 });
 
 

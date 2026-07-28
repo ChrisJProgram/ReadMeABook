@@ -43,9 +43,14 @@ vi.mock('@/lib/services/job-queue.service', () => ({
 
 vi.mock('@/lib/utils/format-coercion', () => formatCoercionMock);
 
+const audioProbeMock = vi.hoisted(() => ({ probeAudioFile: vi.fn() }));
+vi.mock('@/lib/utils/audio-probe', () => audioProbeMock);
+
 describe('processOrganizeFiles', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // D6 default: probe knows nothing — organize outcomes must not depend on it.
+    audioProbeMock.probeAudioFile.mockResolvedValue({ kbps: null, channels: null, codec: null });
     // Default mock for request lookup (processor needs to determine request type)
     prismaMock.request.findUnique.mockResolvedValue({
       id: 'req-default',
@@ -98,6 +103,80 @@ describe('processOrganizeFiles', () => {
 
     expect(result.success).toBe(true);
     expect(libraryServiceMock.triggerLibraryScan).toHaveBeenCalledWith('lib-1');
+  });
+
+  // ================= D6: post-import actual bitrate =================
+
+  const audiobookFixture = (id: string) => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.audiobook.findUnique.mockResolvedValue({
+      id,
+      title: 'Book',
+      author: 'Author',
+      narrator: null,
+      coverArtUrl: null,
+      audibleAsin: 'ASIN-D6',
+    });
+    organizerMock.organize.mockResolvedValue({
+      success: true,
+      targetPath: '/media/Author/Book',
+      filesMovedCount: 1,
+      errors: [],
+      audioFiles: ['/media/Author/Book/Book.m4b'],
+    });
+    prismaMock.audiobook.update.mockResolvedValue({});
+    configMock.getBackendMode.mockResolvedValue('plex');
+    configMock.get.mockResolvedValue(null);
+  };
+
+  it('persists actual bitrate and channels measured by the probe (D6)', async () => {
+    audiobookFixture('a-d6');
+    audioProbeMock.probeAudioFile.mockResolvedValue({ kbps: 125, channels: 2, codec: 'aac' });
+
+    const { processOrganizeFiles } = await import('@/lib/processors/organize-files.processor');
+    const result = await processOrganizeFiles({
+      requestId: 'req-d6',
+      audiobookId: 'a-d6',
+      downloadPath: '/downloads/book',
+      jobId: 'job-d6',
+    });
+
+    expect(result.success).toBe(true);
+    expect(audioProbeMock.probeAudioFile).toHaveBeenCalledWith('/media/Author/Book/Book.m4b');
+    expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'a-d6' },
+        data: expect.objectContaining({
+          actualKbps: 125,
+          audioChannels: 2,
+          status: 'completed',
+        }),
+      })
+    );
+  });
+
+  it('never fails the import when the probe blows up (D6)', async () => {
+    audiobookFixture('a-d6-fail');
+    audioProbeMock.probeAudioFile.mockRejectedValue(new Error('ffprobe exploded'));
+
+    const { processOrganizeFiles } = await import('@/lib/processors/organize-files.processor');
+    const result = await processOrganizeFiles({
+      requestId: 'req-d6-fail',
+      audiobookId: 'a-d6-fail',
+      downloadPath: '/downloads/book',
+      jobId: 'job-d6-fail',
+    });
+
+    expect(result.success).toBe(true); // import unharmed
+    expect(prismaMock.audiobook.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actualKbps: null,
+          audioChannels: null,
+          status: 'completed',
+        }),
+      })
+    );
   });
 
   it('skips filesystem scan when disabled', async () => {

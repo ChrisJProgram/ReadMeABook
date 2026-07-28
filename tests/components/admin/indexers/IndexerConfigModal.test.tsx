@@ -24,10 +24,14 @@ describe('IndexerConfigModal', () => {
       />
     );
 
-    const [priorityInput, seedingInput, ratioInput] = screen.getAllByRole('spinbutton');
+    // Order: Priority, Tier (F3), Seeding Time, Ratio Limit
+    const [priorityInput, tierInput, seedingInput, ratioInput] = screen.getAllByRole('spinbutton');
 
     fireEvent.change(priorityInput, { target: { value: '99' } });
     expect(priorityInput).toHaveValue(25);
+
+    fireEvent.change(tierInput, { target: { value: '-3' } });
+    expect(tierInput).toHaveValue(1); // clamped to >= 1
 
     fireEvent.change(seedingInput, { target: { value: '-5' } });
     expect(seedingInput).toHaveValue(0);
@@ -48,6 +52,7 @@ describe('IndexerConfigModal', () => {
         id: 1,
         name: 'Prowlarr',
         priority: 25,
+        tier: 1, // F3: set above
         seedingTimeMinutes: 0,
         ratioLimit: 1.5,
         rssEnabled: false,
@@ -56,6 +61,25 @@ describe('IndexerConfigModal', () => {
       })
     );
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits tier entirely when left empty (F3: untiered default)', () => {
+    const onSave = vi.fn();
+
+    render(
+      <IndexerConfigModal
+        isOpen
+        onClose={vi.fn()}
+        mode="add"
+        indexer={{ id: 9, name: 'NoTier', protocol: 'torrent', supportsRss: true }}
+        onSave={onSave}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Indexer' }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty('tier');
   });
 
   it('shows warning when all audiobook categories are deselected but still allows save', () => {
