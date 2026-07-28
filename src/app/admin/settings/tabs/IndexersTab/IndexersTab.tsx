@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input';
 import { IndexerManagement } from '@/components/admin/indexers/IndexerManagement';
 import { FlagConfigRow } from '@/components/admin/FlagConfigRow';
 import { ExcludeRuleRow } from '@/components/admin/ExcludeRuleRow';
+import { MamAccountPanel } from '@/components/admin/MamAccountPanel';
 import { IndexerFlagConfig } from '@/lib/utils/ranking-algorithm';
 import { useIndexersSettings } from './useIndexersSettings';
 import type { Settings, SavedIndexerConfig } from '../../lib/types';
@@ -295,6 +296,9 @@ export function IndexersTab({
           </p>
         )}
       </div>
+
+      {/* F7: MyAnonamouse account panel (standing + class-gated [VIP] rule advice) */}
+      <MamAccountPanel />
 
       {/* Confirmation modal for Prowlarr connection change */}
       <ConfirmModal
