@@ -32,8 +32,26 @@ export interface AudiobookRequest {
 }
 
 export interface IndexerFlagConfig {
-  name: string;         // Flag name (e.g., "Freeleech")
-  modifier: number;     // -100 to 100 (percentage)
+  name: string;         // Flag name (e.g., "Freeleech"), or a human label for an exclude rule
+  modifier: number;     // -100 to 100 (percentage); used only by scoring rules (action !== 'exclude')
+  /**
+   * F2(a): rule kind. Absent/'score' = today's flag bonus/penalty (matched against
+   * Prowlarr's `flags` by name). 'exclude' = a hard filter: any release whose TITLE
+   * matches `pattern` is dropped from automatic selection (never merely penalised).
+   * Optional so every existing {name, modifier} config stays valid and unchanged.
+   */
+  action?: 'score' | 'exclude';
+  /**
+   * F2(a): case-insensitive regex tested against the release TITLE (exclude rules only).
+   * MAM encodes entitlement in the title (e.g. `[VIP]`), which never appears in `flags`,
+   * so exclusion matches the title, not the flag array.
+   */
+  pattern?: string;
+  /**
+   * F2(a): restrict an exclude rule to a single indexer (Prowlarr indexerId); absent =
+   * all indexers. Mirrors the per-indexer priority convention (keyed on indexerId).
+   */
+  indexerId?: number;
 }
 
 export interface RankTorrentsOptions {
@@ -171,8 +189,10 @@ export class RankingAlgorithm {
       // Flag bonuses/penalties
       if (torrent.flags && torrent.flags.length > 0 && flagConfigs && flagConfigs.length > 0) {
         torrent.flags.forEach(torrentFlag => {
-          // Case-insensitive, whitespace-trimmed matching
+          // Case-insensitive, whitespace-trimmed matching.
+          // Skip exclude rules (F2(a)) — they are title-pattern filters, not flag modifiers.
           const matchingConfig = flagConfigs.find(cfg =>
+            cfg.action !== 'exclude' &&
             cfg.name.trim().toLowerCase() === torrentFlag.trim().toLowerCase()
           );
 
@@ -891,7 +911,9 @@ export class RankingAlgorithm {
       // Flag bonuses/penalties (same as audiobooks)
       if (torrent.flags && torrent.flags.length > 0 && flagConfigs && flagConfigs.length > 0) {
         torrent.flags.forEach(torrentFlag => {
+          // Skip exclude rules (F2(a)) — title-pattern filters, not flag modifiers.
           const matchingConfig = flagConfigs.find(cfg =>
+            cfg.action !== 'exclude' &&
             cfg.name.trim().toLowerCase() === torrentFlag.trim().toLowerCase()
           );
 

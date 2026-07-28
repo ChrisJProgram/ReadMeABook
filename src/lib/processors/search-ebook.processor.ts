@@ -20,6 +20,7 @@ import { rankEbookTorrents, RankedEbookTorrent } from '../utils/ranking-algorith
 import { groupIndexersByCategories, getGroupDescription } from '../utils/indexer-grouping';
 import { getLanguageForRegion } from '../constants/language-config';
 import { filterBlockedResults } from '../utils/filter-blocked-results';
+import { filterExcludedByRules, summarizeExcluded } from '../utils/indexer-flag-rules';
 import type { AudibleRegion } from '../types/audible';
 
 // Import ebook scraper functions for Anna's Archive
@@ -358,9 +359,21 @@ async function searchIndexers(
     return null;
   }
 
+  // F2(a): drop releases matching a per-indexer title-exclude rule (e.g. MAM [VIP]).
+  // Automatic path only — interactive search shows everything and lets the user decide.
+  const { kept: selectableResults, excluded } = filterExcludedByRules(nonBlockedResults, flagConfigs);
+  if (excluded.length > 0) {
+    logger.info(summarizeExcluded(excluded));
+  }
+
+  if (selectableResults.length === 0) {
+    logger.warn(`All ${nonBlockedResults.length} ebook candidate(s) matched an exclude rule`);
+    return null;
+  }
+
   // Log filter info (ebooks > 20MB will be filtered)
-  const preFilterCount = nonBlockedResults.length;
-  const aboveThreshold = nonBlockedResults.filter(r => (r.size / (1024 * 1024)) > 20);
+  const preFilterCount = selectableResults.length;
+  const aboveThreshold = selectableResults.filter(r => (r.size / (1024 * 1024)) > 20);
   if (aboveThreshold.length > 0) {
     logger.info(`Will filter ${aboveThreshold.length} results > 20 MB (too large for ebooks)`);
   }
@@ -371,7 +384,7 @@ async function searchIndexers(
 
   // Rank results with ebook-specific scoring
   // This filters out > 20MB and uses inverted size scoring
-  const rankedResults = rankEbookTorrents(nonBlockedResults, {
+  const rankedResults = rankEbookTorrents(selectableResults, {
     title: audiobook.title,
     author: audiobook.author,
     preferredFormat,

@@ -13,6 +13,7 @@ import { groupIndexersByCategories, getGroupDescription } from '../utils/indexer
 import { RMABLogger } from '../utils/logger';
 import { getLanguageForRegion } from '../constants/language-config';
 import { filterBlockedResults } from '../utils/filter-blocked-results';
+import { filterExcludedByRules, summarizeExcluded } from '../utils/indexer-flag-rules';
 import type { AudibleRegion } from '../types/audible';
 
 /**
@@ -195,20 +196,32 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
     }
 
     const preBlocklistCount = allResults.length;
-    const { kept: searchResults, blockedCount } = await filterBlockedResults(requestId, allResults);
+    const { kept: nonBlocked, blockedCount } = await filterBlockedResults(requestId, allResults);
     if (blockedCount > 0) {
       logger.debug(`Filtered out ${blockedCount} blocklisted release(s) before ranking`);
     }
-    logger.info(`Found ${searchResults.length} total results from ${groups.length} group${groups.length > 1 ? 's' : ''}${blockedCount > 0 ? ` (${blockedCount} blocked)` : ''}`);
+
+    // F2(a): drop releases matching a per-indexer title-exclude rule (e.g. MAM [VIP]).
+    // Automatic path only — interactive search shows everything and lets the user decide.
+    const { kept: searchResults, excluded } = filterExcludedByRules(nonBlocked, flagConfigs);
+    if (excluded.length > 0) {
+      logger.info(summarizeExcluded(excluded));
+    }
+
+    logger.info(`Found ${searchResults.length} total results from ${groups.length} group${groups.length > 1 ? 's' : ''}${blockedCount > 0 ? ` (${blockedCount} blocked)` : ''}${excluded.length > 0 ? ` (${excluded.length} excluded)` : ''}`);
 
     if (searchResults.length === 0) {
-      // No usable results — either Prowlarr returned nothing, or the blocklist
-      // removed everything it returned. Surface a blocklist-specific message in
-      // the latter case so admins know to unblock (or accept it as terminal).
-      const allBlocked = blockedCount > 0 && preBlocklistCount > 0;
-      const errorMessage = allBlocked
-        ? `No usable releases — ${preBlocklistCount} candidates tried, all blocked`
-        : 'No torrents/nzbs found. Will retry automatically.';
+      // No usable results. Distinguish the causes so an admin can tell "my exclude
+      // rule / blocklist removed everything" from "the book doesn't exist" (the D2
+      // confusion the spec calls out). Exclude takes precedence when it emptied the
+      // post-blocklist set — it's the actionable, user-authored cause.
+      const allExcluded = excluded.length > 0 && nonBlocked.length > 0;
+      const allBlocked = !allExcluded && blockedCount > 0 && preBlocklistCount > 0;
+      const errorMessage = allExcluded
+        ? `No usable releases — ${excluded.length} candidate(s) matched an exclude rule`
+        : allBlocked
+          ? `No usable releases — ${preBlocklistCount} candidates tried, all blocked`
+          : 'No torrents/nzbs found. Will retry automatically.';
 
       logger.warn(`${errorMessage} for request ${requestId}, marking as awaiting_search`);
 
@@ -224,7 +237,7 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
 
       return {
         success: false,
-        message: allBlocked ? errorMessage : 'No torrents/nzbs found, queued for re-search',
+        message: (allExcluded || allBlocked) ? errorMessage : 'No torrents/nzbs found, queued for re-search',
         requestId,
       };
     }

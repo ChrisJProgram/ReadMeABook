@@ -731,6 +731,28 @@ describe('ranking-algorithm', () => {
       const flagBonus = ranked[0].bonusModifiers.find(m => m.type === 'indexer_flag');
       expect(flagBonus).toBeDefined();
     });
+
+    it('ignores exclude rules (F2(a)) — they never apply as flag score modifiers', () => {
+      const torrent = {
+        ...baseTorrent,
+        flags: ['MAM VIP'],
+        indexerId: 1,
+      };
+
+      // An exclude rule whose name coincides with a flag must NOT be scored as a bonus.
+      const flagConfigs = [
+        { name: 'MAM VIP', modifier: 50, action: 'exclude' as const, pattern: '\\[VIP\\]' },
+      ];
+
+      const ranked = rankTorrents(
+        [torrent],
+        { title: 'Great Book', author: 'Author Name' },
+        { flagConfigs }
+      );
+
+      const flagBonus = ranked[0].bonusModifiers.find(m => m.type === 'indexer_flag');
+      expect(flagBonus).toBeUndefined();
+    });
   });
 
   describe('Tiebreaker Sorting', () => {

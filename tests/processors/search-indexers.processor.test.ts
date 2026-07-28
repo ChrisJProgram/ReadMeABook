@@ -307,6 +307,116 @@ describe('processSearchIndexers', () => {
     expect(jobQueueMock.addDownloadJob).not.toHaveBeenCalled();
   });
 
+  // ================= F2(a): release exclusion rules =================
+
+  describe('F2(a): title-pattern exclusion rules', () => {
+    // MAM (id 20) with a rule that excludes [VIP] releases on that indexer.
+    const mamWithVipRule = (key: string) => {
+      if (key === 'prowlarr_indexers') {
+        return JSON.stringify([{ id: 20, name: 'MAM', protocol: 'torrent', priority: 10, categories: [3030] }]);
+      }
+      if (key === 'indexer_flag_config') {
+        return JSON.stringify([
+          { name: 'MAM VIP', modifier: 0, action: 'exclude', pattern: '\\[VIP\\]', indexerId: 20 },
+        ]);
+      }
+      return null;
+    };
+
+    it('excludes a matching release and grabs the clean alternative instead', async () => {
+      configMock.get.mockImplementation(async (key: string) => mamWithVipRule(key));
+
+      // The [VIP] release has FAR more seeders — without the exclude rule it wins.
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        {
+          indexer: 'MAM', indexerId: 20, title: 'Jumpnauts - Author [M4B] [VIP]',
+          size: 50 * 1024 * 1024, seeders: 80, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:vip', guid: 'guid-vip', format: 'M4B',
+        },
+        {
+          indexer: 'MAM', indexerId: 20, title: 'Jumpnauts - Author [M4B]',
+          size: 50 * 1024 * 1024, seeders: 3, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:clean', guid: 'guid-clean', format: 'M4B',
+        },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-vip', audiobook: { id: 'a-vip', title: 'Jumpnauts', author: 'Author' }, jobId: 'job-vip',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledTimes(1);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledWith(
+        'req-vip',
+        expect.objectContaining({ id: 'a-vip' }),
+        expect.objectContaining({ title: 'Jumpnauts - Author [M4B]' }),
+      );
+    });
+
+    it('marks awaiting_search with an exclude-specific reason when every candidate is excluded', async () => {
+      configMock.get.mockImplementation(async (key: string) => mamWithVipRule(key));
+
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        {
+          indexer: 'MAM', indexerId: 20, title: 'Jumpnauts - Author [M4B] [VIP]',
+          size: 50 * 1024 * 1024, seeders: 80, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:vip', guid: 'guid-vip', format: 'M4B',
+        },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-vip2', audiobook: { id: 'a-vip2', title: 'Jumpnauts', author: 'Author' }, jobId: 'job-vip2',
+      });
+
+      expect(result.success).toBe(false);
+      expect(jobQueueMock.addDownloadJob).not.toHaveBeenCalled();
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'awaiting_search',
+            errorMessage: expect.stringContaining('exclude rule'),
+          }),
+        }),
+      );
+    });
+
+    it('does not exclude a [VIP] release on a different indexer (per-indexer scope)', async () => {
+      configMock.get.mockImplementation(async (key: string) => {
+        if (key === 'prowlarr_indexers') {
+          return JSON.stringify([{ id: 25, name: 'ABB', protocol: 'torrent', priority: 10, categories: [3030] }]);
+        }
+        if (key === 'indexer_flag_config') {
+          return JSON.stringify([
+            { name: 'MAM VIP', modifier: 0, action: 'exclude', pattern: '\\[VIP\\]', indexerId: 20 },
+          ]);
+        }
+        return null;
+      });
+
+      // A [VIP] release on ABB (id 25) — the rule is scoped to indexer 20, so it stays.
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        {
+          indexer: 'ABB', indexerId: 25, title: 'Jumpnauts - Author [M4B] [VIP]',
+          size: 50 * 1024 * 1024, seeders: 10, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:abbvip', guid: 'guid-abbvip', format: 'M4B',
+        },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-vip3', audiobook: { id: 'a-vip3', title: 'Jumpnauts', author: 'Author' }, jobId: 'job-vip3',
+      });
+
+      expect(result.success).toBe(true);
+      expect(jobQueueMock.addDownloadJob).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ================= F0/F1: runtime resolution, hold, floor =================
 
   const indexerConfig = (extra: Record<string, string | null> = {}) =>

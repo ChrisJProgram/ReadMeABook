@@ -11,6 +11,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Input } from '@/components/ui/Input';
 import { IndexerManagement } from '@/components/admin/indexers/IndexerManagement';
 import { FlagConfigRow } from '@/components/admin/FlagConfigRow';
+import { ExcludeRuleRow } from '@/components/admin/ExcludeRuleRow';
 import { IndexerFlagConfig } from '@/lib/utils/ranking-algorithm';
 import { useIndexersSettings } from './useIndexersSettings';
 import type { Settings, SavedIndexerConfig } from '../../lib/types';
@@ -65,6 +66,23 @@ export function IndexersTab({
     // Only run on mount, not when settings change
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Scoring rules and exclusion rules share one `flagConfigs` array (an entry is an
+  // exclusion rule iff action === 'exclude'). Keep each item's ORIGINAL index so edits
+  // and removals target the right element regardless of how the list is partitioned.
+  const indexedConfigs = flagConfigs.map((config, index) => ({ config, index }));
+  const scoreRules = indexedConfigs.filter(({ config }) => config.action !== 'exclude');
+  const excludeRules = indexedConfigs.filter(({ config }) => config.action === 'exclude');
+
+  const updateFlagConfigAt = (index: number, updated: IndexerFlagConfig) => {
+    const next = [...flagConfigs];
+    next[index] = updated;
+    onFlagConfigsChange(next);
+  };
+  const removeFlagConfigAt = (index: number) => {
+    onFlagConfigsChange(flagConfigs.filter((_, i) => i !== index));
+  };
+
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
@@ -188,7 +206,7 @@ export function IndexersTab({
         />
       </div>
 
-      {/* Flag Configuration Section */}
+      {/* Flag Configuration Section (scoring rules) */}
       <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
         <div className="mb-4">
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
@@ -200,38 +218,80 @@ export function IndexersTab({
           </p>
         </div>
 
-        {flagConfigs.length > 0 && (
+        {scoreRules.length > 0 && (
           <div className="space-y-3 mb-4">
-            {flagConfigs.map((config, index) => (
+            {scoreRules.map(({ config, index }) => (
               <FlagConfigRow
                 key={index}
                 config={config}
-                onChange={(updated) => {
-                  const newConfigs = [...flagConfigs];
-                  newConfigs[index] = updated;
-                  onFlagConfigsChange(newConfigs);
-                }}
-                onRemove={() => {
-                  onFlagConfigsChange(flagConfigs.filter((_, i) => i !== index));
-                }}
+                onChange={(updated) => updateFlagConfigAt(index, updated)}
+                onRemove={() => removeFlagConfigAt(index)}
               />
             ))}
           </div>
         )}
 
         <Button
-          onClick={() => {
-            onFlagConfigsChange([...flagConfigs, { name: '', modifier: 0 }]);
-          }}
+          onClick={() => onFlagConfigsChange([...flagConfigs, { name: '', modifier: 0 }])}
           variant="outline"
           size="sm"
         >
           + Add Flag Rule
         </Button>
 
-        {flagConfigs.length === 0 && (
+        {scoreRules.length === 0 && (
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-3 italic">
             No flag rules configured. Flag bonuses/penalties are optional.
+          </p>
+        )}
+      </div>
+
+      {/* Exclusion Rules Section (F2(a): hard title-pattern excludes) */}
+      <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+        <div className="mb-4">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
+            Release Exclusion Rules (Optional)
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Hard-exclude releases whose <span className="font-medium">title</span> matches a pattern —
+            for entitlements the account can never fetch, like MyAnonamouse{' '}
+            <code className="px-1 rounded bg-gray-200 dark:bg-gray-700">[VIP]</code> releases.
+            Unlike a score penalty, a matched release is removed from{' '}
+            <span className="font-medium">automatic</span> selection entirely. Interactive search
+            still lists everything so you can override.
+          </p>
+        </div>
+
+        {excludeRules.length > 0 && (
+          <div className="space-y-3 mb-4">
+            {excludeRules.map(({ config, index }) => (
+              <ExcludeRuleRow
+                key={index}
+                config={config}
+                indexers={indexers.map((i) => ({ id: i.id, name: i.name }))}
+                onChange={(updated) => updateFlagConfigAt(index, updated)}
+                onRemove={() => removeFlagConfigAt(index)}
+              />
+            ))}
+          </div>
+        )}
+
+        <Button
+          onClick={() =>
+            onFlagConfigsChange([
+              ...flagConfigs,
+              { name: '', modifier: 0, action: 'exclude', pattern: '' },
+            ])
+          }
+          variant="outline"
+          size="sm"
+        >
+          + Add Exclusion Rule
+        </Button>
+
+        {excludeRules.length === 0 && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-3 italic">
+            No exclusion rules configured.
           </p>
         )}
       </div>
