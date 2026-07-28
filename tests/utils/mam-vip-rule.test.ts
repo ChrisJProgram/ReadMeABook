@@ -68,10 +68,8 @@ describe('has / with / without MamVipRule', () => {
 });
 
 describe('shouldExcludeVip', () => {
-  it('keeps the rule unless VIP is both possible (class) AND active', () => {
-    expect(shouldExcludeVip(false, false)).toBe(true); // below Power User
-    expect(shouldExcludeVip(false, true)).toBe(true);  // "active" but ineligible class — still exclude
-    expect(shouldExcludeVip(true, false)).toBe(true);  // eligible but no active VIP
-    expect(shouldExcludeVip(true, true)).toBe(false);  // eligible AND active → drop the rule
+  it('keeps the rule exactly while VIP is not active (VIP is a readable class)', () => {
+    expect(shouldExcludeVip(false)).toBe(true); // no VIP class → exclude [VIP] releases
+    expect(shouldExcludeVip(true)).toBe(false); // class IS VIP → they are freeleech → keep them
   });
 });

@@ -59,9 +59,13 @@ export function withoutMamVipRule(configs: IndexerFlagConfig[], mamIndexerId: nu
 
 /**
  * Should the `[VIP]` exclude rule be present?
- * PRESENT unless the account can currently fetch `[VIP]`: VIP-eligible by class
- * (`vipPossible`) AND VIP currently active (`vipActive`). Anything else keeps it.
+ *
+ * PRESENT unless VIP is currently active. Per the MAM FAQ, VIP is itself a member
+ * CLASS ("VIP: Can be bought with bonus points or donations. VIP members have …
+ * special VIP freeleech torrents"), so `classname` reports it directly and reverts
+ * when VIP lapses — no separate eligibility signal is needed (donations can grant
+ * VIP without Power User).
  */
-export function shouldExcludeVip(vipPossible: boolean, vipActive: boolean): boolean {
-  return !(vipPossible && vipActive);
+export function shouldExcludeVip(vipActive: boolean): boolean {
+  return !vipActive;
 }

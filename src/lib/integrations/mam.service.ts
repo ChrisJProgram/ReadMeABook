@@ -26,20 +26,36 @@ const POINT_WARN = 90000;
 const UNSAT_WARN_FRAC = 0.85;
 
 /**
- * MAM user classes, ascending. VIP (personal freeleech) requires Power User+.
- * Only classes we're confident about are mapped; an unknown/unmapped class returns
- * rank null → treated as NOT VIP-eligible (conservative: keep the exclude rule).
+ * MAM member classes, ascending, per the site FAQ ("What are the different member
+ * and staff classes?"): Mouse → User → Power User → VIP → Elite VIP → Elite →
+ * Supporter → Mouseketeer → Uploader (staff classes are separate). **VIP is itself
+ * a class** — "Can be bought with bonus points or donations. VIP members have their
+ * own forum and special VIP freeleech torrents. Note: You must first obtain Power
+ * User Status if purchasing with bonus points." An unknown/unmapped class (e.g.
+ * staff) returns rank null; VIP detection is by name, not rank.
  */
 const CLASS_RANK: Record<string, number> = {
   mouse: 0,
   user: 1,
   'power user': 2,
-  elite: 3,
-  'extreme user': 4,
-  'elite vip': 5,
-  vip: 6,
+  vip: 3,
+  'elite vip': 4,
+  elite: 5,
+  supporter: 6,
+  mouseketeer: 7,
+  uploader: 8,
 };
 const POWER_USER_RANK = 2;
+
+/**
+ * VIP-active = the class name itself says VIP ("VIP", "Elite VIP"). Conservative
+ * for every other class (Elite/staff/unknown): keep the exclude rule — a wrongly
+ * kept rule only hides auto-candidates (interactive still shows all), while a
+ * wrongly dropped rule recreates the original failing-download loop F2 fixed.
+ */
+function isVipClass(className: string | undefined): boolean {
+  return !!className && /\bvip\b/i.test(className);
+}
 
 /** Minimal shape of the fields we read from `jsonLoad.php?snatch_summary`. */
 interface MamCounter {
@@ -68,7 +84,8 @@ export interface MamAccountStatus {
   username?: string;
   className?: string;
   classRank?: number | null;
-  vipPossible?: boolean; // class ≥ Power User (VIP purchasable at all)
+  vipActive?: boolean;   // classname is a VIP class ("VIP"/"Elite VIP") → [VIP] releases are freeleech-gettable
+  vipPossible?: boolean; // class ≥ Power User — VIP purchasable with bonus points (donations can bypass)
   seedbonus?: number;
   pointCap: number;
   wedges?: number;
@@ -145,6 +162,7 @@ export async function getMamAccountStatus(): Promise<MamAccountStatus> {
   const counterCount = (c?: MamCounter): number => Number(c?.count ?? 0);
   const className: string | undefined = d.classname ?? undefined;
   const classRank = classRankOf(className);
+  const vipActive = isVipClass(className);
   const vipPossible = classRank !== null && classRank >= POWER_USER_RANK;
 
   const seedbonus = Number(d.seedbonus ?? 0);
@@ -169,6 +187,7 @@ export async function getMamAccountStatus(): Promise<MamAccountStatus> {
     username: d?.username,
     className,
     classRank,
+    vipActive,
     vipPossible,
     seedbonus,
     pointCap: POINT_CAP,

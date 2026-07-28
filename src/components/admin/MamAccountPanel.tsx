@@ -20,6 +20,7 @@ interface MamAccount {
   indexerId?: number;
   username?: string;
   className?: string;
+  vipActive?: boolean;
   vipPossible?: boolean;
   seedbonus?: number;
   pointCap: number;
@@ -37,7 +38,6 @@ interface VipRuleState {
   present: boolean;
   recommendedPresent: boolean;
   inSync: boolean;
-  vipUntil: string | null;
   vipActive: boolean;
 }
 
@@ -53,7 +53,6 @@ export function MamAccountPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [vipUntilInput, setVipUntilInput] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,7 +62,6 @@ export function MamAccountPanel() {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load MAM status');
       setBundle({ account: data.account, vipRule: data.vipRule });
-      setVipUntilInput(data.vipRule?.vipUntil || '');
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load MAM status');
     } finally {
@@ -87,7 +85,6 @@ export function MamAccountPanel() {
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || 'Action failed');
         setBundle({ account: data.account, vipRule: data.vipRule });
-        setVipUntilInput(data.vipRule?.vipUntil || '');
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : 'Action failed');
       } finally {
@@ -166,7 +163,11 @@ export function MamAccountPanel() {
             <>
               {account.className ?? '—'}{' '}
               <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
-                {account.vipPossible ? '(VIP-eligible)' : '(below Power User)'}
+                {account.vipActive
+                  ? '(VIP active)'
+                  : account.vipPossible
+                    ? '(can buy VIP with points)'
+                    : '(below Power User)'}
               </span>
             </>
           }
@@ -216,10 +217,10 @@ export function MamAccountPanel() {
               </div>
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                 {vipRule.vipActive
-                  ? 'You marked VIP as active — VIP releases are freeleech-gettable, so the rule should be OFF.'
+                  ? `Your class is ${account.className} — VIP releases are freeleech for you, so the rule should be OFF. When VIP lapses, your class reverts and the rule comes back.`
                   : account.vipPossible
-                    ? 'You are VIP-eligible. If you have active VIP, set its expiry below and the rule lifts automatically.'
-                    : 'Class is below Power User, so VIP releases are ungettable — the rule should stay ON.'}
+                    ? 'No active VIP (your class is not VIP). The rule should stay ON until you buy VIP — then it lifts automatically on the next refresh.'
+                    : 'Class is below Power User, so VIP is not purchasable with points and VIP releases are ungettable — the rule should stay ON.'}
               </p>
             </div>
             {!vipRule.inSync && (
@@ -236,29 +237,6 @@ export function MamAccountPanel() {
           </div>
           {vipRule.inSync && (
             <p className="text-xs text-green-700 dark:text-green-400 mt-2">✓ In sync with the recommendation.</p>
-          )}
-
-          {/* VIP-until override — only meaningful once VIP-eligible (Power User+) */}
-          {account.vipPossible && (
-            <div className="mt-4 flex items-end gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">VIP active until</label>
-                <input
-                  type="date"
-                  value={vipUntilInput}
-                  onChange={(e) => setVipUntilInput(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-gray-100"
-                />
-              </div>
-              <Button onClick={() => post({ action: 'set-vip-until', until: vipUntilInput })} loading={busy} variant="outline" size="sm">
-                Save
-              </Button>
-              {vipRule.vipUntil && (
-                <Button onClick={() => post({ action: 'set-vip-until', until: '' })} loading={busy} variant="ghost" size="sm">
-                  Clear
-                </Button>
-              )}
-            </div>
           )}
         </div>
       )}

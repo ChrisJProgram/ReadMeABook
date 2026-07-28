@@ -44,18 +44,18 @@ async function writeFlagConfigs(configs: IndexerFlagConfig[]): Promise<void> {
   ]);
 }
 
-/** Assemble the panel bundle: account status + rule/VIP state. */
+/** Assemble the panel bundle: account status + rule state.
+ *  VIP-active comes straight from the account's CLASS (per the MAM FAQ, VIP is a
+ *  member class that reverts when it lapses) — no separate stored override. */
 async function buildBundle() {
   const account = await getMamAccountStatus();
-  const configService = getConfigService();
-
-  const vipUntil = (await configService.get('mam_vip_until')) || null;
-  const vipActive = !!vipUntil && !Number.isNaN(Date.parse(vipUntil)) && new Date(vipUntil) > new Date();
 
   const flagConfigs = await readFlagConfigs();
   const present =
     account.indexerId != null ? hasMamVipRule(flagConfigs, account.indexerId) : false;
-  const recommendedPresent = shouldExcludeVip(!!account.vipPossible, vipActive);
+  // Only recommend on a real reading: if the status fetch failed, recommend the
+  // status quo (never advise dropping the rule on missing data).
+  const recommendedPresent = account.ok ? shouldExcludeVip(!!account.vipActive) : present;
 
   return {
     account,
@@ -63,8 +63,7 @@ async function buildBundle() {
       present,
       recommendedPresent,
       inSync: present === recommendedPresent,
-      vipUntil,
-      vipActive,
+      vipActive: !!account.vipActive,
     },
   };
 }
@@ -107,23 +106,6 @@ export async function POST(request: NextRequest) {
             : withoutMamVipRule(current, ref.id);
           await writeFlagConfigs(next);
           logger.info(`MAM [VIP] exclude rule ${present ? 'enabled' : 'disabled'} for indexer ${ref.id}`);
-          return NextResponse.json({ success: true, ...(await buildBundle()) });
-        }
-
-        if (action === 'set-vip-until') {
-          const until = body.until;
-          if (until != null && until !== '' && Number.isNaN(Date.parse(String(until)))) {
-            return NextResponse.json({ success: false, error: 'Invalid date.' }, { status: 400 });
-          }
-          await getConfigService().setMany([
-            {
-              key: 'mam_vip_until',
-              value: until == null ? '' : String(until),
-              category: 'indexer',
-              description: 'MAM VIP expiry (personal freeleech); lifts the [VIP] exclude rule while active',
-            },
-          ]);
-          logger.info(`MAM VIP-until set to "${until ?? ''}"`);
           return NextResponse.json({ success: true, ...(await buildBundle()) });
         }
 
