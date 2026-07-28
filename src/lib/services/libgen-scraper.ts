@@ -91,8 +91,31 @@ const MATCH_STOP_WORDS = new Set([
   'the', 'a', 'an', 'of', 'and', 'or', 'to', 'in', 'on', 'for', 'with',
 ]);
 
+// Author-string noise: honorifics/suffixes/credits that are not part of a name.
+// Used to isolate the real surname of the primary author.
+const AUTHOR_NOISE = new Set([
+  'phd', 'ph', 'md', 'jr', 'sr', 'ii', 'iii', 'translator', 'narrator',
+  'author', 'editor', 'ed', 'read', 'by', 'foreword',
+]);
+
 function contentTokens(normalized: string): string[] {
   return normalized.split(' ').filter((t) => t && !MATCH_STOP_WORDS.has(t));
+}
+
+/**
+ * Surname of the PRIMARY author. Audiobook author fields are often polluted
+ * with the narrator and honorifics — e.g. "Emily Nagoski Ph.D., Nicholas
+ * Boulton" (Boulton is the narrator). Take the first comma/semicolon-separated
+ * segment (the real author), drop honorific/credit noise, and use its last
+ * remaining token as the surname to match on. This is far more robust than
+ * "last token of the whole string", which would pick the narrator.
+ */
+export function primaryAuthorSurname(rawAuthor: string): string {
+  const primary = rawAuthor.split(/[,;]/)[0] || rawAuthor;
+  const tokens = normalizeForMatch(primary)
+    .split(' ')
+    .filter((t) => t.length >= 3 && !AUTHOR_NOISE.has(t));
+  return tokens.length > 0 ? tokens[tokens.length - 1] : '';
 }
 
 /**
@@ -125,12 +148,13 @@ function scoreCandidate(
   const rowAuthor = normalizeForMatch(row.author);
 
   // ----- Author gate (required) -----
-  const authorTokens = reqAuthorNorm.split(' ').filter(Boolean);
-  const surname = authorTokens[authorTokens.length - 1];
+  // Match on the PRIMARY author's surname (robust to appended narrators and
+  // honorifics), or a full-author substring match as a strong fallback.
+  const surname = primaryAuthorSurname(req.author);
   const authorMatches =
     !!reqAuthorNorm &&
     (rowAuthor.includes(reqAuthorNorm) ||
-      (!!surname && surname.length >= 2 && rowAuthor.split(' ').includes(surname)));
+      (!!surname && rowAuthor.split(' ').includes(surname)));
   if (!authorMatches) return null;
 
   // ----- Title overlap -----

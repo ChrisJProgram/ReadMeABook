@@ -31,6 +31,7 @@ import {
   parseLibgenSize,
   extractLibgenGetUrl,
   buildLibgenAdsUrl,
+  primaryAuthorSurname,
   searchLibgen,
   resolveLibgenDownloadUrl,
   DEFAULT_LIBGEN_MIRROR,
@@ -134,6 +135,15 @@ describe('libgen-scraper', () => {
     });
   });
 
+  describe('primaryAuthorSurname', () => {
+    it('takes the primary author surname, ignoring appended narrator + honorifics', () => {
+      // Real rmab2 case: audiobook author field carries the narrator + a Ph.D.
+      expect(primaryAuthorSurname('Emily Nagoski Ph.D., Nicholas Boulton')).toBe('nagoski');
+      expect(primaryAuthorSurname('Emily Nagoski')).toBe('nagoski');
+      expect(primaryAuthorSurname('Brandon Sanderson; Michael Kramer')).toBe('sanderson');
+    });
+  });
+
   describe('searchLibgen', () => {
     it('returns author-matched results best-first and excludes wrong-author rows', async () => {
       axiosMock.get.mockResolvedValue({ data: SEARCH_HTML });
@@ -146,6 +156,21 @@ describe('libgen-scraper', () => {
       expect(results[0].md5).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
       expect(results[0].author).toBe('Emily Nagoski');
       expect(results[0].format).toBe('epub');
+    });
+
+    it('matches when the request author has an appended narrator (audiobook author field)', async () => {
+      axiosMock.get.mockResolvedValue({ data: SEARCH_HTML });
+
+      // The audiobook author field pollutes the name with a narrator; the primary
+      // author's surname ("Nagoski") must still match the Libgen row.
+      const results = await searchLibgen(
+        'Come As You Are: Revised and Updated',
+        'Emily Nagoski Ph.D., Nicholas Boulton',
+        'epub'
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0].md5).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     });
 
     it('returns an empty array on request failure', async () => {
