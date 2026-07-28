@@ -119,6 +119,38 @@ export function primaryAuthorSurname(rawAuthor: string): string {
 }
 
 /**
+ * Build a clean Libgen SEARCH query from a (possibly polluted) title+author.
+ * Libgen's index.php?req= is effectively an AND over terms, so extra tokens —
+ * a ":" subtitle, an "(Unabridged)" note, an appended narrator, "Ph.D." — drop
+ * the result count to zero. Verified live: the raw audiobook title+author
+ * returned 0 rows; title-before-colon + primary author returned 63.
+ *
+ * The full (unstripped) title/author are still used for SCORING/gating — this
+ * only widens what the mirror returns.
+ */
+export function buildLibgenQuery(title: string, author: string): string {
+  // Title: drop everything after the first ":" (subtitle) and any parentheticals.
+  const cleanTitle = title
+    .split(':')[0]
+    .replace(/\([^)]*\)/g, ' ')
+    .trim() || title;
+
+  // Author: primary (pre-comma) segment with honorific/credit noise removed,
+  // preserving the given+family name for the query (not just the surname).
+  const primarySeg = author.split(/[,;]/)[0] || author;
+  const cleanAuthor = primarySeg
+    .split(/\s+/)
+    .filter((w) => {
+      const n = w.toLowerCase().replace(/[^a-z]/g, '');
+      return n.length > 0 && !AUTHOR_NOISE.has(n);
+    })
+    .join(' ')
+    .trim();
+
+  return [cleanTitle, cleanAuthor].filter(Boolean).join(' ');
+}
+
+/**
  * Parse a human-readable Libgen size string ("640 kB", "1.2 MB", "1 GB") to
  * bytes. Returns 0 when unparseable.
  */
@@ -290,7 +322,7 @@ export async function searchLibgen(
 ): Promise<LibgenResult[]> {
   const base = baseUrl.replace(/\/+$/, '');
   try {
-    const query = [title, author].filter(Boolean).join(' ');
+    const query = buildLibgenQuery(title, author);
     const searchUrl = `${base}/index.php?req=${encodeURIComponent(query)}&res=100`;
     moduleLogger.debug(`Libgen search URL: ${searchUrl}`);
 

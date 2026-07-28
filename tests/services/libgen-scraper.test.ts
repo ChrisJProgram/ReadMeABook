@@ -31,6 +31,7 @@ import {
   parseLibgenSize,
   extractLibgenGetUrl,
   buildLibgenAdsUrl,
+  buildLibgenQuery,
   primaryAuthorSurname,
   searchLibgen,
   resolveLibgenDownloadUrl,
@@ -132,6 +133,16 @@ describe('libgen-scraper', () => {
     });
     it('returns null when no get.php link is present', () => {
       expect(extractLibgenGetUrl('<html><body>no link</body></html>', 'https://libgen.bz/ads.php?md5=x')).toBeNull();
+    });
+  });
+
+  describe('buildLibgenQuery', () => {
+    it('strips subtitle, parentheticals, narrator and honorifics for the search query', () => {
+      // Libgen req= is AND-matched; the raw audiobook strings return 0 rows live.
+      expect(buildLibgenQuery('Come As You Are: Revised and Updated', 'Emily Nagoski Ph.D., Nicholas Boulton'))
+        .toBe('Come As You Are Emily Nagoski');
+      expect(buildLibgenQuery('The Way of Kings (Unabridged)', 'Brandon Sanderson'))
+        .toBe('The Way of Kings Brandon Sanderson');
     });
   });
 
