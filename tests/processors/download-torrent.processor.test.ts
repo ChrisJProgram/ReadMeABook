@@ -171,6 +171,73 @@ describe('processDownloadTorrent', () => {
     );
 
     expect(downloadClientManagerMock.getClientServiceForProtocol).toHaveBeenCalledWith('torrent');
+    // Precondition/config error (never attempted the add) must NOT blocklist the release.
+    expect(prismaMock.blockedRelease.upsert).not.toHaveBeenCalled();
+  });
+
+  // F2(b): a permanent, release-specific add failure blocklists the release and
+  // flips the request back to awaiting_search (re-selection), WITHOUT throwing —
+  // a throw would let the global failed handler overwrite awaiting_search.
+  it('blocklists the release and re-queues for search on a permanent add failure', async () => {
+    const addErr = new Error('Download failed') as Error & { response?: { status?: number } };
+    addErr.response = { status: 500 }; // indexer 500 "Download failed" (e.g. VIP-gated)
+    const qbtClientMock = {
+      clientType: 'qbittorrent',
+      protocol: 'torrent',
+      addDownload: vi.fn().mockRejectedValue(addErr),
+    };
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(qbtClientMock);
+    downloadClientManagerMock.getClientForProtocol.mockResolvedValue({
+      id: 'client-1', type: 'qbittorrent', enabled: true, category: 'readmeabook',
+    });
+    prismaMock.request.update.mockResolvedValue({ type: 'audiobook', user: { plexUsername: 'testuser' } });
+    prismaMock.blockedRelease.upsert.mockResolvedValue({ createdAt: new Date() });
+
+    const { processDownloadTorrent } = await import('@/lib/processors/download-torrent.processor');
+    const result = await processDownloadTorrent(torrentPayload);
+
+    // Did NOT throw; reported a re-selection.
+    expect(result.reselected).toBe(true);
+    expect(result.blockedRelease).toBe('Book - Author');
+    // Blocklisted this exact release as a download_fail.
+    expect(prismaMock.blockedRelease.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          requestId: 'req-1',
+          releaseName: 'Book - Author',
+          source: 'download_fail',
+        }),
+      })
+    );
+    // Flipped to awaiting_search (NOT failed) so retry-missing-torrents re-searches.
+    expect(prismaMock.request.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { id: 'req-1' },
+        data: expect.objectContaining({ status: 'awaiting_search' }),
+      })
+    );
+  });
+
+  // A 429 (rate limit) is transient: retry via Bull (throw), and NEVER blocklist.
+  it('rethrows and does NOT blocklist on a 429 rate-limit add failure', async () => {
+    const rateErr = new Error('[QBittorrent] HTTP error 429') as Error & { response?: { status?: number } };
+    rateErr.response = { status: 429 };
+    const qbtClientMock = {
+      clientType: 'qbittorrent',
+      protocol: 'torrent',
+      addDownload: vi.fn().mockRejectedValue(rateErr),
+    };
+    downloadClientManagerMock.getClientServiceForProtocol.mockResolvedValue(qbtClientMock);
+    downloadClientManagerMock.getClientForProtocol.mockResolvedValue({
+      id: 'client-1', type: 'qbittorrent', enabled: true, category: 'readmeabook',
+    });
+    prismaMock.request.update.mockResolvedValue({ type: 'audiobook', user: { plexUsername: 'testuser' } });
+
+    const { processDownloadTorrent } = await import('@/lib/processors/download-torrent.processor');
+
+    await expect(processDownloadTorrent(torrentPayload)).rejects.toThrow('429');
+    // Rate limit must not discard the release.
+    expect(prismaMock.blockedRelease.upsert).not.toHaveBeenCalled();
   });
 
   it('detects protocol from result and routes appropriately', async () => {

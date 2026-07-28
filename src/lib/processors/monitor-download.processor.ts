@@ -223,18 +223,9 @@ export async function processMonitorDownload(payload: MonitorDownloadPayload): P
 
       const errorMessage = `Download failed in ${client.clientType}`;
       const clientErrorDetail = info.errorMessage ?? null;
+      const reason = classifyDownloadFailure(clientErrorDetail);
 
-      // Update request to failed
-      await prisma.request.update({
-        where: { id: requestId },
-        data: {
-          status: 'failed',
-          errorMessage,
-          updatedAt: new Date(),
-        },
-      });
-
-      // Update download history
+      // Mark this download attempt failed.
       await prisma.downloadHistory.update({
         where: { id: downloadHistoryId },
         data: {
@@ -257,40 +248,36 @@ export async function processMonitorDownload(payload: MonitorDownloadPayload): P
           indexerName: failedDownload.indexerName ?? null,
           indexerId: failedDownload.indexerId ?? null,
           source: 'download_fail',
-          reason: classifyDownloadFailure(clientErrorDetail),
+          reason,
           reasonDetail: clientErrorDetail,
           downloadHistoryId: failedDownload.id,
           jobId,
         });
       }
 
-      // Send notification for request failure
-      const request = await prisma.request.findUnique({
+      // F2(b): a failed download is NOT a terminal request failure — flip back to
+      // awaiting_search so retry-missing-torrents re-runs selection and
+      // filterBlockedResults skips this now-blocklisted release, picking a
+      // DIFFERENT candidate. No request_error notification here: re-selection is
+      // automatic recovery, not a failure the user must act on (a genuinely
+      // unfulfillable request lands in awaiting_search "no matches", same as an
+      // ordinary empty search — consistent, and equally silent).
+      await prisma.request.update({
         where: { id: requestId },
-        include: {
-          audiobook: true,
-          user: { select: { plexUsername: true } },
+        data: {
+          status: 'awaiting_search',
+          errorMessage: `${reason} — blocklisted "${failedDownload?.torrentName ?? 'release'}", re-searching for an alternative.`,
+          lastSearchAt: new Date(),
+          updatedAt: new Date(),
         },
       });
 
-      if (request) {
-        const jobQueue = getJobQueueService();
-        await jobQueue.addNotificationJob(
-          'request_error',
-          request.id,
-          request.audiobook.title,
-          request.audiobook.author,
-          request.user.plexUsername || 'Unknown User',
-          errorMessage
-        ).catch((error) => {
-          logger.error('Failed to queue notification', { error: error instanceof Error ? error.message : String(error) });
-        });
-      }
+      logger.warn(`Release blocklisted (${reason}); request ${requestId} re-queued for search`);
 
       return {
         success: false,
         completed: true,
-        message: 'Download failed',
+        message: 'Download failed; blocklisted and re-queued for search',
         requestId,
         progress: progressPercent,
       };

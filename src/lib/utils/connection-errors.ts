@@ -20,8 +20,15 @@ const TRANSIENT_ERROR_CODES = new Set([
   'EAI_AGAIN',
 ]);
 
-/** HTTP status codes that indicate a gateway / upstream service issue. */
-const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
+/**
+ * HTTP status codes that indicate a temporary condition to back off on rather
+ * than a permanent, release-specific failure.
+ *  - 502/503/504: gateway / upstream service issue.
+ *  - 429: rate limit ("too many requests"). The release is NOT ungettable — the
+ *    client/indexer is throttling us — so this must retry with backoff and must
+ *    NEVER trigger F2(b) blocklisting (this stack has a documented 429 history).
+ */
+const TRANSIENT_HTTP_STATUSES = new Set([429, 502, 503, 504]);
 
 /**
  * Substrings in error messages that strongly indicate a connection-level
@@ -42,6 +49,14 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   'socket hang up',
   'network error',
   'Client network socket disconnected',
+  // Rate-limit phrasings (when the 429 arrives as a plain message with no
+  // structured status, e.g. "[QBittorrent] HTTP error 429"). Kept specific to
+  // avoid matching an incidental "429" substring in an unrelated error.
+  'error 429',
+  'http 429',
+  'too many requests',
+  'rate limit',
+  'rate-limit',
 ] as const;
 
 /**

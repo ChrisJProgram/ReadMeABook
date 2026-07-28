@@ -10,6 +10,7 @@ import { getDownloadClientManager } from '../services/download-client-manager.se
 import { ProwlarrService } from '../integrations/prowlarr.service';
 import { RMABLogger } from '../utils/logger';
 import { isTransientConnectionError } from '../utils/connection-errors';
+import { addAutoBlock } from '../services/blocklist.service';
 
 /**
  * Process download job
@@ -28,6 +29,13 @@ export async function processDownloadTorrent(payload: DownloadTorrentPayload): P
     format: torrent.format,
     indexer: torrent.indexer,
   });
+
+  // Tracks whether we got as far as calling the download client's addDownload().
+  // Only failures AFTER this point are release-specific (indexer 403/404/410/500,
+  // client add-reject) and eligible for F2(b) blocklist + re-selection. Failures
+  // BEFORE it (e.g. "no client configured") are config/precondition errors —
+  // blocklisting the release for those would wrongly discard a gettable copy.
+  let attemptedAdd = false;
 
   try {
     // Update request status to downloading
@@ -69,7 +77,9 @@ export async function processDownloadTorrent(payload: DownloadTorrentPayload): P
       sourceHeaders['X-Api-Key'] = prowlarrApiKey;
     }
 
-    // Add download via unified interface
+    // Add download via unified interface. From here on, a permanent failure is
+    // release-specific (F2(b) blocklist + re-select applies).
+    attemptedAdd = true;
     const downloadClientId = await client.addDownload(torrent.downloadUrl, {
       category,
       priority: 'normal',
@@ -149,21 +159,70 @@ export async function processDownloadTorrent(payload: DownloadTorrentPayload): P
     logger.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
 
     if (isTransientConnectionError(error)) {
-      // Connection error — don't mark request as failed yet.
-      // Bull will retry this job (3 attempts with exponential backoff).
-      // If all retries are exhausted, the global failed handler marks it failed.
-      logger.warn(`Download client unreachable for request ${requestId}, allowing Bull to retry`);
-    } else {
-      // Permanent error — mark request as failed immediately
+      // Transient (client unreachable, gateway 5xx, or a 429 rate limit) — do
+      // NOT mark failed and do NOT blocklist. Bull retries this job (3 attempts
+      // with exponential backoff); if exhausted, the global failed handler marks
+      // it failed.
+      logger.warn(`Transient download-client error for request ${requestId}, allowing Bull to retry`);
+      throw error;
+    }
+
+    if (attemptedAdd) {
+      // F2(b) — permanent, release-specific failure (indexer 403/404/410/500
+      // "Download failed" on a VIP/ratio-gated release, or a client add-reject).
+      // Blocklist this exact release and flip the request back to awaiting_search
+      // so retry-missing-torrents re-runs selection; filterBlockedResults then
+      // skips this release and a DIFFERENT candidate is chosen — instead of
+      // retrying the same ungettable release forever. Return (do NOT throw): a
+      // throw would let the global failed handler overwrite awaiting_search.
+      const httpStatus = (error as { response?: { status?: number } })?.response?.status;
+      const errMsg = error instanceof Error ? error.message : 'Failed to add download to client';
+      const reason = httpStatus ? `Download fetch failed (HTTP ${httpStatus})` : 'Download add failed';
+
+      await addAutoBlock({
+        requestId,
+        releaseName: torrent.title,
+        releaseHash: torrent.infoHash ?? null,
+        indexerName: torrent.indexer ?? null,
+        indexerId: torrent.indexerId ?? null,
+        source: 'download_fail',
+        reason,
+        reasonDetail: errMsg,
+        jobId,
+      });
+
       await prisma.request.update({
         where: { id: requestId },
         data: {
-          status: 'failed',
-          errorMessage: error instanceof Error ? error.message : 'Failed to add download to client',
+          status: 'awaiting_search',
+          errorMessage: `${reason} — blocklisted "${torrent.title}", re-searching for an alternative.`,
+          lastSearchAt: new Date(),
           updatedAt: new Date(),
         },
       });
+
+      logger.warn(`Release "${torrent.title}" blocklisted (${reason}); request ${requestId} re-queued for search`);
+
+      return {
+        success: false,
+        reselected: true,
+        requestId,
+        blockedRelease: torrent.title,
+        message: 'Release failed; blocklisted and re-queued for search',
+      };
     }
+
+    // Precondition/config error before the add attempt (e.g. no client
+    // configured) — genuinely failed; re-searching would not help. Mark failed
+    // and rethrow (the global safety net also marks it failed).
+    await prisma.request.update({
+      where: { id: requestId },
+      data: {
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'Failed to add download to client',
+        updatedAt: new Date(),
+      },
+    });
 
     throw error;
   }

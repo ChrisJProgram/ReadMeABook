@@ -156,7 +156,7 @@ describe('processMonitorDownload', () => {
     );
   });
 
-  it('marks request failed when download fails and auto-blocks the release', async () => {
+  it('auto-blocks the release and re-queues for search when the client reports a failed download', async () => {
     const qbtClientMock = {
       clientType: 'qbittorrent',
       protocol: 'torrent',
@@ -205,11 +205,15 @@ describe('processMonitorDownload', () => {
     });
 
     expect(result.success).toBe(false);
+    // F2(b): a client-reported failure is NOT terminal — flip to awaiting_search
+    // (not failed) so retry-missing-torrents re-runs selection excluding the block.
     expect(prismaMock.request.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: 'failed' }),
+        data: expect.objectContaining({ status: 'awaiting_search' }),
       })
     );
+    // ...and re-selection is silent recovery — no terminal request_error notification.
+    expect(jobQueueMock.addNotificationJob).not.toHaveBeenCalled();
     expect(prismaMock.blockedRelease.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { requestId_releaseKey: { requestId: 'req-3', releaseKey: 'book - author [m4b]' } },
