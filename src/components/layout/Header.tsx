@@ -20,7 +20,13 @@ export function Header() {
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const isSearchPage = pathname === '/search';
+  // Search row is HOME-ONLY. It runs Audible's free-text catalog keyword search
+  // over BOOKS, which is a different mechanism from the specialised inputs on
+  // /authors ("Search by author name") and /series ("Search by series name") —
+  // those resolve author/series *entities* via Audnexus and series scraping.
+  // Showing a book-keyword bar above those inputs implied they were the same
+  // thing. /search has its own large input, and /requests is a plain list.
+  const isHomePage = pathname === '/';
   const headerRef = useRef<HTMLElement>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -101,7 +107,7 @@ export function Header() {
       observer.disconnect();
       window.removeEventListener('resize', publish);
     };
-  }, [isSearchPage, showMobileMenu, user]);
+  }, [isHomePage, showMobileMenu, user]);
 
   const handleLogin = async () => {
     try {
@@ -297,10 +303,8 @@ export function Header() {
           </div>
         </div>
 
-        {/* Search row — its own full-width line beneath the nav bar.
-            Suppressed on /search, which already leads with its own large
-            search input; two stacked search boxes would just be confusing. */}
-        {!isSearchPage && (
+        {/* Search row — its own full-width line beneath the nav bar, home only. */}
+        {isHomePage && (
           <div className="mt-3 md:mt-4">
             <SearchBar
               variant="page"
