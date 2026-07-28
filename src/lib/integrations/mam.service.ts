@@ -118,6 +118,63 @@ function classRankOf(className: string | undefined): number | null {
   return r === undefined ? null : r;
 }
 
+// ============================ VIP purchase (F7 L3) ============================
+
+/**
+ * Store facts (verbatim, store.php 2026-07-28): VIP "Requires rank of Power user or
+ * VIP", "Costs 5000 points per four week. (Minimum 4 weeks, or Max button)", max 90
+ * days banked. The buy buttons call `/json/bonusBuy.php` (GET, `spendtype=` param)
+ * via the site bundle — but the VIP param VALUES are built dynamically and were not
+ * extractable, so the exact shape is UNVERIFIED until captured from a real purchase
+ * (decision I4: capture the user's first manual buy from the browser network log).
+ *
+ * Until that capture flips this flag, purchaseVip() REFUSES — the auto-VIP job can
+ * only dry-run. This is a second, code-level gate behind the `mam_auto_vip_dry_run`
+ * config so a config typo alone can never spend points through an unverified call.
+ */
+export const VIP_PURCHASE_ENDPOINT_VERIFIED = false;
+
+export const VIP_COST_PER_4_WEEKS = 5000;
+export type VipPurchaseWeeks = 4 | 8 | 12;
+
+export interface VipPurchaseResult {
+  ok: boolean;
+  error?: string;
+  raw?: unknown;
+}
+
+/**
+ * Spend bonus points on VIP status. Single attempt, no retries — the caller (the
+ * auto-VIP processor) owns cooldowns and the failure breaker.
+ */
+export async function purchaseVip(weeks: VipPurchaseWeeks): Promise<VipPurchaseResult> {
+  if (!VIP_PURCHASE_ENDPOINT_VERIFIED) {
+    return {
+      ok: false,
+      error:
+        'VIP purchase endpoint not yet verified (pending first-buy capture — I4). Refusing to spend points on an unverified call.',
+    };
+  }
+
+  const ref = await getMamIndexerRef();
+  if (!ref) {
+    return { ok: false, error: 'No MyAnonamouse indexer with a session cookie in Prowlarr.' };
+  }
+
+  try {
+    // TODO(first-buy capture): replace with the exact captured request. Expected
+    // shape (community-known, UNVERIFIED): GET /json/bonusBuy.php?spendtype=VIP&duration=<weeks>
+    const resp = await axios.get('https://www.myanonamouse.net/json/bonusBuy.php', {
+      params: { spendtype: 'VIP', duration: weeks },
+      headers: { Cookie: `mam_id=${ref.cookie}`, 'User-Agent': MAM_UA },
+      timeout: 30000,
+    });
+    return { ok: true, raw: resp.data };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Read-only MAM account status for the panel. Never throws — returns ok:false instead. */
 export async function getMamAccountStatus(): Promise<MamAccountStatus> {
   let ref: { id: number; cookie: string } | null;

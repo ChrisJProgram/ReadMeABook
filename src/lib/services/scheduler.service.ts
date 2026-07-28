@@ -22,7 +22,7 @@ const STALE_NAME_REWRITES: ReadonlyArray<{
   { type: 'plex_recently_added_check', staleName: 'Plex Recently Added Check', neutralName: 'Recently Added Check' },
 ];
 
-export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists';
+export type ScheduledJobType = 'plex_library_scan' | 'plex_recently_added_check' | 'audible_refresh' | 'retry_missing_torrents' | 'retry_failed_imports' | 'find_missing_ebooks' | 'cleanup_seeded_torrents' | 'monitor_rss_feeds' | 'sync_reading_shelves' | 'check_watched_lists' | 'mam_auto_vip';
 
 export interface ScheduledJob {
   id: string;
@@ -163,6 +163,13 @@ export class SchedulerService {
         type: 'check_watched_lists' as ScheduledJobType,
         schedule: '0 0 * * *', // Daily at midnight (every 24 hours)
         enabled: true, // Enable by default
+        payload: {},
+      },
+      {
+        name: 'MAM Auto-VIP',
+        type: 'mam_auto_vip' as ScheduledJobType,
+        schedule: '0 * * * *', // Hourly; the processor is config-gated (mam_auto_vip_enabled, default off) and no-ops fast
+        enabled: true,
         payload: {},
       },
     ];
@@ -438,6 +445,9 @@ export class SchedulerService {
         break;
       case 'check_watched_lists':
         bullJobId = await this.triggerCheckWatchedLists(job);
+        break;
+      case 'mam_auto_vip':
+        bullJobId = await this.triggerMamAutoVip(job);
         break;
       default:
         throw new Error(`Unknown job type: ${job.type}`);
@@ -726,6 +736,13 @@ export class SchedulerService {
    */
   private async triggerCheckWatchedLists(job: any): Promise<string> {
     return await this.jobQueue.addCheckWatchedListsJob(job.id);
+  }
+
+  /**
+   * Trigger the MAM auto-VIP maintenance pass (F7 L3; config-gated inside)
+   */
+  private async triggerMamAutoVip(job: { id: string }): Promise<string> {
+    return await this.jobQueue.addMamAutoVipJob(job.id);
   }
 }
 

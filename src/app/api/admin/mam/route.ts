@@ -10,7 +10,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, requireAdmin, AuthenticatedRequest } from '@/lib/middleware/auth';
 import { getConfigService } from '@/lib/services/config.service';
-import { getMamAccountStatus, getMamIndexerRef } from '@/lib/integrations/mam.service';
+import {
+  getMamAccountStatus,
+  getMamIndexerRef,
+  VIP_PURCHASE_ENDPOINT_VERIFIED,
+  VIP_COST_PER_4_WEEKS,
+} from '@/lib/integrations/mam.service';
 import {
   hasMamVipRule,
   withMamVipRule,
@@ -57,6 +62,22 @@ async function buildBundle() {
   // status quo (never advise dropping the rule on missing data).
   const recommendedPresent = account.ok ? shouldExcludeVip(!!account.vipActive) : present;
 
+  // F7 L3: auto-VIP settings + attempt state for the panel card.
+  const configService = getConfigService();
+  const autoCfg = await configService.getMany([
+    'mam_auto_vip_enabled',
+    'mam_auto_vip_dry_run',
+    'mam_auto_vip_duration_weeks',
+    'mam_auto_vip_reserve_points',
+    'mam_auto_vip_state',
+  ]);
+  let autoState: Record<string, unknown> = {};
+  try {
+    autoState = autoCfg.mam_auto_vip_state ? JSON.parse(autoCfg.mam_auto_vip_state) : {};
+  } catch {
+    autoState = {};
+  }
+
   return {
     account,
     vipRule: {
@@ -64,6 +85,20 @@ async function buildBundle() {
       recommendedPresent,
       inSync: present === recommendedPresent,
       vipActive: !!account.vipActive,
+    },
+    autoVip: {
+      enabled: autoCfg.mam_auto_vip_enabled === 'true',
+      dryRun: autoCfg.mam_auto_vip_dry_run !== 'false', // default TRUE
+      durationWeeks: [8, 12].includes(parseInt(autoCfg.mam_auto_vip_duration_weeks ?? '', 10))
+        ? parseInt(autoCfg.mam_auto_vip_duration_weeks as string, 10)
+        : 4,
+      reservePoints:
+        autoCfg.mam_auto_vip_reserve_points != null && autoCfg.mam_auto_vip_reserve_points !== ''
+          ? Math.max(0, parseInt(autoCfg.mam_auto_vip_reserve_points, 10) || 0)
+          : 2000,
+      costPer4Weeks: VIP_COST_PER_4_WEEKS,
+      endpointVerified: VIP_PURCHASE_ENDPOINT_VERIFIED,
+      state: autoState,
     },
   };
 }
@@ -106,6 +141,44 @@ export async function POST(request: NextRequest) {
             : withoutMamVipRule(current, ref.id);
           await writeFlagConfigs(next);
           logger.info(`MAM [VIP] exclude rule ${present ? 'enabled' : 'disabled'} for indexer ${ref.id}`);
+          return NextResponse.json({ success: true, ...(await buildBundle()) });
+        }
+
+        if (action === 'set-auto-vip') {
+          const updates: Array<{ key: string; value: string; category: string; description: string }> = [];
+          const push = (key: string, value: string, description: string) =>
+            updates.push({ key, value, category: 'indexer', description });
+
+          if (typeof body.enabled === 'boolean') {
+            push('mam_auto_vip_enabled', String(body.enabled), 'MAM auto-VIP purchase (opt-in)');
+            // Re-arming clears the failure breaker so the feature can run again.
+            if (body.enabled) {
+              push('mam_auto_vip_state', '{}', 'MAM auto-VIP attempt history (cooldown + failure breaker)');
+            }
+          }
+          if (typeof body.dryRun === 'boolean') {
+            push('mam_auto_vip_dry_run', String(body.dryRun), 'MAM auto-VIP dry-run mode (log only, never spend)');
+          }
+          if (body.durationWeeks !== undefined) {
+            const weeks = parseInt(String(body.durationWeeks), 10);
+            if (![4, 8, 12].includes(weeks)) {
+              return NextResponse.json({ success: false, error: 'durationWeeks must be 4, 8 or 12.' }, { status: 400 });
+            }
+            push('mam_auto_vip_duration_weeks', String(weeks), 'MAM auto-VIP purchase duration (weeks)');
+          }
+          if (body.reservePoints !== undefined) {
+            const reserve = parseInt(String(body.reservePoints), 10);
+            if (Number.isNaN(reserve) || reserve < 0) {
+              return NextResponse.json({ success: false, error: 'reservePoints must be a non-negative integer.' }, { status: 400 });
+            }
+            push('mam_auto_vip_reserve_points', String(reserve), 'MAM auto-VIP: bonus points to keep untouched');
+          }
+
+          if (updates.length === 0) {
+            return NextResponse.json({ success: false, error: 'No auto-VIP fields to update.' }, { status: 400 });
+          }
+          await getConfigService().setMany(updates);
+          logger.info(`Auto-VIP settings updated: ${updates.map((u) => `${u.key}=${u.value}`).join(', ')}`);
           return NextResponse.json({ success: true, ...(await buildBundle()) });
         }
 

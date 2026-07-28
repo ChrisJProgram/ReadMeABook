@@ -30,6 +30,7 @@ export type JobType =
   | 'sync_reading_shelves'
   | 'check_watched_lists'
   | 'send_notification'
+  | 'mam_auto_vip'
   // Ebook-specific job types
   | 'search_ebook'
   | 'start_direct_download'
@@ -99,6 +100,10 @@ export interface AudibleRefreshPayload extends JobPayload {
 }
 
 export interface RetryMissingTorrentsPayload extends JobPayload {
+  scheduledJobId?: string;
+}
+
+export interface MamAutoVipPayload extends JobPayload {
   scheduledJobId?: string;
 }
 
@@ -420,6 +425,12 @@ export class JobQueueService {
       const { processCheckWatchedLists } = await import('../processors/check-watched-lists.processor');
       const payloadWithJobId = await this.ensureJobRecord(job, 'check_watched_lists');
       return await processCheckWatchedLists(payloadWithJobId);
+    });
+
+    this.queue.process('mam_auto_vip', 1, async (job: BullJob<MamAutoVipPayload>) => {
+      const { processMamAutoVip } = await import('../processors/mam-auto-vip.processor');
+      const payloadWithJobId = await this.ensureJobRecord(job, 'mam_auto_vip');
+      return await processMamAutoVip(payloadWithJobId);
     });
 
     // Send notification processor
@@ -755,6 +766,18 @@ export class JobQueueService {
       } as RetryMissingTorrentsPayload,
       {
         priority: 7,
+      }
+    );
+  }
+
+  async addMamAutoVipJob(scheduledJobId?: string): Promise<string> {
+    return await this.addJob(
+      'mam_auto_vip',
+      {
+        scheduledJobId,
+      } as MamAutoVipPayload,
+      {
+        priority: 8, // Background account maintenance — below selection work
       }
     );
   }
