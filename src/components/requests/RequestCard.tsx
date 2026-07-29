@@ -15,6 +15,7 @@ import { usePreferences } from '@/contexts/PreferencesContext';
 import { AudiobookDetailsModal } from '@/components/audiobooks/AudiobookDetailsModal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { COMPLETED_STATUSES, CANCELLABLE_STATUSES } from '@/lib/constants/request-statuses';
+import { classifyAwaitingSearchReason } from '@/lib/utils/request-reason';
 
 interface RequestCardProps {
   request: {
@@ -167,7 +168,7 @@ export function RequestCard({ request, showActions = true }: RequestCardProps) {
 
           {/* Status Badge and Type Badge */}
           <div className="flex items-center gap-2 flex-wrap">
-            <StatusBadge status={request.status} progress={request.progress} />
+            <StatusBadge status={request.status} progress={request.progress} errorMessage={request.errorMessage} />
             {releaseDateLabel && (
               <span className="text-xs text-gray-500 dark:text-gray-400">
                 Releases {releaseDateLabel}
@@ -239,6 +240,18 @@ export function RequestCard({ request, showActions = true }: RequestCardProps) {
               </div>
             </div>
           )}
+
+          {/* Why a parked request isn't downloading — friendly, always-visible
+              one-liner keyed to the badge category (Locked / Held / etc.). */}
+          {request.status === 'awaiting_search' && (() => {
+            const reason = classifyAwaitingSearchReason(request.errorMessage);
+            if (!reason) return null;
+            return (
+              <div className="text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 px-2 py-1.5 rounded border border-gray-200 dark:border-gray-700/60">
+                {reason.hint}
+              </div>
+            );
+          })()}
 
           {/* Error Message */}
           {isFailed && request.errorMessage && (

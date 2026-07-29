@@ -30,4 +30,38 @@ describe('StatusBadge', () => {
     expect(badge.className).toContain('dark:bg-teal-900');
     expect(badge.className).toContain('dark:text-teal-200');
   });
+
+  // awaiting_search now says WHY it isn't downloading, keyed to the errorMessage.
+  it('shows the generic Awaiting Search label when no errorMessage is given (back-compat)', () => {
+    render(<StatusBadge status="awaiting_search" />);
+    expect(screen.getByText('Awaiting Search')).toBeInTheDocument();
+  });
+
+  it('renders a Locked badge (amber) for a VIP/exclude-rule awaiting_search', () => {
+    render(
+      <StatusBadge
+        status="awaiting_search"
+        errorMessage="No usable releases — 2 candidate(s) matched an exclude rule"
+      />
+    );
+    const badge = screen.getByText('Locked');
+    expect(badge).toBeInTheDocument();
+    expect(screen.queryByText('Awaiting Search')).not.toBeInTheDocument();
+    expect(badge.className).toContain('bg-amber-100');
+    expect(badge.className).toContain('dark:text-amber-200');
+    // The full reason is available as a tooltip.
+    expect(badge).toHaveAttribute('title');
+  });
+
+  it('renders a Searching badge (blue) while re-selecting after a failed download', () => {
+    render(
+      <StatusBadge
+        status="awaiting_search"
+        errorMessage='Download fetch failed (HTTP 500) — blocklisted "X", re-searching for an alternative.'
+      />
+    );
+    const badge = screen.getByText('Searching');
+    expect(badge).toBeInTheDocument();
+    expect(badge.className).toContain('bg-blue-100');
+  });
 });

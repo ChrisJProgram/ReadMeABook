@@ -7,14 +7,52 @@
 
 import React from 'react';
 import { cn } from '@/lib/utils/cn';
+import {
+  classifyAwaitingSearchReason,
+  type RequestReasonTone,
+} from '@/lib/utils/request-reason';
 
 interface StatusBadgeProps {
   status: string;
   progress?: number;
+  /**
+   * When set on an `awaiting_search` request, the generic label is replaced by a
+   * categorised reason (Locked / Held / Low Quality / Not Found / Searching) so
+   * the badge says WHY it isn't downloading. Optional and backward-compatible:
+   * omit it and the generic "Awaiting Search" label is used.
+   */
+  errorMessage?: string | null;
   className?: string;
 }
 
-export function StatusBadge({ status, progress, className }: StatusBadgeProps) {
+const REASON_TONE_COLOR: Record<RequestReasonTone, string> = {
+  blocked: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  action: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  waiting: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  info: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+};
+
+export function StatusBadge({ status, progress, errorMessage, className }: StatusBadgeProps) {
+  // Categorised reason for a parked request — Locked/Held/Not Found/etc. — so
+  // "Awaiting Search" no longer hides why a request is stuck.
+  if (status === 'awaiting_search') {
+    const reason = classifyAwaitingSearchReason(errorMessage);
+    if (reason) {
+      return (
+        <span
+          title={reason.hint}
+          className={cn(
+            'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
+            REASON_TONE_COLOR[reason.tone],
+            className
+          )}
+        >
+          {reason.label}
+        </span>
+      );
+    }
+  }
+
   const statusConfig: Record<string, { label: string; color: string }> = {
     pending: {
       label: 'Pending',
