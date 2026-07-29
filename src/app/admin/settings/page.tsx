@@ -180,7 +180,7 @@ export default function AdminSettings() {
   // Loading state
   if (loading || !settings) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
@@ -205,10 +205,10 @@ export default function AdminSettings() {
   })();
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="sticky z-10 mb-8 flex items-center justify-between bg-gray-50 dark:bg-gray-900 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
+        <div className="sticky z-10 mb-8 flex items-center justify-between bg-background py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
               Settings

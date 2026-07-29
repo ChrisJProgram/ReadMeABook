@@ -506,7 +506,7 @@ function AdminDashboardContent() {
 
   if (hasError) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-8">
+      <div className="min-h-screen bg-background p-8">
         <div className="max-w-7xl mx-auto">
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
             <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
@@ -524,10 +524,10 @@ function AdminDashboardContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="sticky z-10 mb-8 flex items-center justify-between bg-gray-50 dark:bg-gray-900 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
+        <div className="sticky z-10 mb-8 flex items-center justify-between bg-background py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
               Admin Dashboard

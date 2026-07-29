@@ -50,4 +50,15 @@ describe('BlocklistToolbar sticky anchor', () => {
     expect(root.className).not.toMatch(/\btop-0\b/);
     expect(root.style.top).toBe('var(--rmab-header-h, 4rem)');
   });
+
+  it('paints the app background (bg-background), matching the rest of the site — not gray-900', () => {
+    const { container } = render(<BlocklistToolbar total={0} onCleared={() => {}} />);
+
+    const root = container.firstChild as HTMLElement;
+    // Opaque fill so scrolling content is masked, but the SAME token the body
+    // uses (var(--background)) so admin no longer diverges to the blue-tinted
+    // gray-900 the rest of the site never shows.
+    expect(root.className).toContain('bg-background');
+    expect(root.className).not.toMatch(/\bdark:bg-gray-900\b/);
+  });
 });

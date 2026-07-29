@@ -38,7 +38,7 @@ export function BlocklistToolbar({ total, onCleared }: BlocklistToolbarProps) {
   const canClear = total > 0;
 
   return (
-    <div className="sticky z-10 mb-6 sm:mb-8 bg-gray-50 dark:bg-gray-900 py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
+    <div className="sticky z-10 mb-6 sm:mb-8 bg-background py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
       {/* Row 1: title + back link */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
