@@ -7,7 +7,6 @@
 
 import { useState, useEffect } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
 import { authenticatedFetcher, fetchJSON } from '@/lib/utils/api';
 import { ToastProvider, useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -540,15 +539,6 @@ function AdminUsersPageContent() {
                 <span className="hidden sm:inline">Global User Permissions</span>
                 <span className="sm:hidden">Permissions</span>
               </button>
-              <Link
-                href="/admin"
-                className="inline-flex items-center gap-2 px-3 sm:px-4 py-2.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors text-sm font-medium"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                </svg>
-                <span>Back</span>
-              </Link>
             </div>
           </div>
         </div>

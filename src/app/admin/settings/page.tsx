@@ -10,7 +10,6 @@
 
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/Button';
-import Link from 'next/link';
 import { fetchWithAuth } from '@/lib/utils/api';
 import { IndexerFlagConfig } from '@/lib/utils/ranking-algorithm';
 
@@ -217,15 +216,6 @@ export default function AdminSettings() {
               Configure system integrations and preferences
             </p>
           </div>
-          <Link
-            href="/admin"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            <span>Back to Dashboard</span>
-          </Link>
         </div>
 
         {/* Tab Navigation */}

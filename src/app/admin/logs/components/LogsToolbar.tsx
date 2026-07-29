@@ -13,7 +13,6 @@
 
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useLogsUrlState } from '../hooks/useLogsUrlState';
 import { useAutoRefreshControl } from '../hooks/useAutoRefreshControl';
@@ -74,8 +73,8 @@ export function LogsToolbar() {
 
   return (
     <div className="sticky z-10 mb-6 sm:mb-8 bg-background py-4 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 border-b border-gray-200 dark:border-gray-800" style={{ top: 'var(--rmab-header-h, 4rem)' }}>
-      {/* Row 1: title + back link */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* Row 1: title */}
+      <div className="flex flex-col gap-3">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
             System Logs
@@ -84,15 +83,6 @@ export function LogsToolbar() {
             View background jobs and system activity
           </p>
         </div>
-        <Link
-          href="/admin"
-          className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors text-sm font-medium self-start sm:self-auto flex-shrink-0"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          <span>Back to Dashboard</span>
-        </Link>
       </div>
 
       {/* Row 2: errors-only pill + live indicator + refresh + auto-toggle */}
