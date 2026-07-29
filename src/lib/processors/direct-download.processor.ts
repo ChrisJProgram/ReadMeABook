@@ -14,6 +14,7 @@ import { getConfigService } from '../services/config.service';
 import { RMABLogger } from '../utils/logger';
 import { extractDownloadUrl, ExtractedDownload } from '../services/ebook-scraper';
 import { resolveLibgenDownloadUrl } from '../services/libgen-scraper';
+import { addAutoBlock } from '../services/blocklist.service';
 import axios from 'axios';
 import { RMAB_USER_AGENT } from '../utils/user-agent';
 import fs from 'fs/promises';
@@ -23,6 +24,13 @@ import path from 'path';
 const DOWNLOAD_TIMEOUT_MS = 120000; // 2 minutes per download attempt
 const MAX_DOWNLOAD_ATTEMPTS = 5;
 const PROGRESS_UPDATE_INTERVAL_MS = 2000; // Update progress every 2 seconds
+
+// How many times a single direct-source release (md5) may fail to download for a
+// request before it is blocklisted and the search falls through to the next
+// edition / source. A generous budget across re-searches (which are hours apart)
+// means a genuine blip retries the same source, but a persistently slow/stalling
+// CDN mirror or never-resolving key is escaped instead of looping forever.
+const DIRECT_SOURCE_RETRY_BUDGET = 3;
 
 // In-memory tracking for active downloads
 interface ActiveDownload {
@@ -40,6 +48,18 @@ interface ActiveDownload {
 }
 
 const activeDownloads = new Map<string, ActiveDownload>();
+
+// A file-fetch that 404/410s means the release is genuinely GONE from the CDN —
+// the only signal that justifies blocklisting an ebook release (F2(b) for direct
+// sources). Everything else (no URL resolved, timeout, 5xx, 429, stream reset)
+// is transient and must NOT blocklist a still-gettable release.
+const PERMANENT_FILE_STATUSES = new Set([404, 410]);
+
+interface DownloadOutcome {
+  ok: boolean;
+  /** HTTP status of a non-2xx file response, when the fetch got that far. */
+  httpStatus?: number;
+}
 
 /**
  * Generate unique download ID
@@ -110,6 +130,10 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
 
     const attemptsLimit = Math.min(downloadUrls.length, MAX_DOWNLOAD_ATTEMPTS);
 
+    // Set if any file fetch came back 404/410 (release gone) — drives the
+    // blocklist decision in the failure branch below.
+    let permanentHttpStatus: number | undefined;
+
     for (let i = 0; i < attemptsLimit; i++) {
       const slowLink = downloadUrls[i];
       logger.info(`Attempting download link ${i + 1}/${attemptsLimit}...`);
@@ -151,14 +175,14 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
         activeDownloads.set(downloadId, downloadEntry);
 
         // Start download with progress tracking
-        const success = await downloadFileWithProgress(
+        const dl = await downloadFileWithProgress(
           extracted.url,
           targetPath,
           downloadEntry,
           logger
         );
 
-        if (success) {
+        if (dl.ok) {
           downloadResult = {
             success: true,
             filePath: targetPath,
@@ -178,7 +202,10 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
           break;
         }
 
-        logger.warn(`Download attempt ${i + 1} failed`);
+        if (dl.httpStatus !== undefined && PERMANENT_FILE_STATUSES.has(dl.httpStatus)) {
+          permanentHttpStatus = dl.httpStatus;
+        }
+        logger.warn(`Download attempt ${i + 1} failed${dl.httpStatus ? ` (HTTP ${dl.httpStatus})` : ''}`);
         activeDownloads.delete(downloadId);
       } catch (error) {
         logger.warn(`Download link ${i + 1} error: ${error instanceof Error ? error.message : 'Unknown'}`);
@@ -186,14 +213,75 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
     }
 
     if (!downloadResult.success) {
-      // All attempts failed
-      logger.error(`All ${attemptsLimit} download attempts failed`);
+      // F2(b) for direct ebook sources (Libgen / Anna's Archive). The torrent
+      // path already learns from download failures; this path used to just die
+      // in `failed`, so a request would sit dead until the daily find-missing
+      // sweep — never falling through to the next source. Instead, flip back to
+      // `awaiting_search` so retry-missing-torrents re-runs the ebook search:
+      //   - Transient failure (no URL resolved, timeout, 5xx, 429, stream reset):
+      //     re-search retries the same source. This recovers the common case —
+      //     Libgen's get.php key rotates per fetch and its CDN mirrors stall, so
+      //     "no URL" / a dropped stream is usually a blip, not a dead release.
+      //   - Permanent, release-specific failure (the file itself 404/410s — GONE):
+      //     blocklist this exact md5 so filterBlockedResults (F6) skips it and the
+      //     source order falls through to the next edition, then the indexer (MAM).
+      // NEVER blocklist a still-gettable release on a single blip — discarding one
+      // is the 429-scar this stack has already paid for. Return (do NOT throw): a
+      // throw lets the global `failed` handler overwrite `awaiting_search`.
+      //
+      // Blocklist this exact md5 (so filterBlockedResults (F6) skips it on the
+      // re-search and the source order advances) when EITHER:
+      //   - the file itself 404/410s — it is GONE — blocklist immediately; or
+      //   - this md5 has now failed DIRECT_SOURCE_RETRY_BUDGET times for this
+      //     request — a persistently slow/stalling mirror or never-resolving key,
+      //     effectively ungettable from this source, so fall through to the next
+      //     edition then the indexer (MAM). Below the budget it's a transient blip
+      //     and the SAME source is retried.
+      const failErr = downloadResult.error || 'All download attempts failed';
+      const md5 = downloadHistory?.torrentHash ?? null;
+      const releaseName = downloadHistory?.torrentName ?? targetFilename;
+      logger.error(`All ${attemptsLimit} download attempts failed: ${failErr}`);
+
+      let priorFailures = 0;
+      if (md5) {
+        priorFailures = await prisma.downloadHistory.count({
+          where: { requestId, torrentHash: md5, downloadStatus: 'failed' },
+        });
+      }
+      const attemptNo = priorFailures + 1; // this failure included
+      const goneStatus = permanentHttpStatus !== undefined;
+      const budgetExhausted = md5 !== null && attemptNo >= DIRECT_SOURCE_RETRY_BUDGET;
+      const blocklist = md5 !== null && (goneStatus || budgetExhausted);
+
+      const blockReason = goneStatus
+        ? `Ebook file gone (HTTP ${permanentHttpStatus})`
+        : `Ebook unreachable from this source after ${attemptNo} attempts`;
+
+      if (blocklist) {
+        await addAutoBlock({
+          requestId,
+          releaseName,
+          releaseHash: md5!,
+          indexerName: source === 'libgen' ? 'Libgen' : "Anna's Archive",
+          indexerId: null,
+          source: 'download_fail',
+          reason: blockReason,
+          reasonDetail: failErr,
+          jobId,
+        });
+        logger.warn(`Release "${releaseName}" (md5 ${md5}) blocklisted (${blockReason}); re-queued for search`);
+      }
+
+      const errorMessage = blocklist
+        ? `${blockReason} — blocklisted "${releaseName}", re-searching for an alternative.`
+        : `Ebook download failed (${failErr}) — re-searching (attempt ${attemptNo}).`;
 
       await prisma.request.update({
         where: { id: requestId },
         data: {
-          status: 'failed',
-          errorMessage: downloadResult.error || 'All download attempts failed',
+          status: 'awaiting_search',
+          errorMessage,
+          lastSearchAt: new Date(),
           updatedAt: new Date(),
         },
       });
@@ -202,15 +290,20 @@ export async function processStartDirectDownload(payload: StartDirectDownloadPay
         where: { id: downloadHistoryId },
         data: {
           downloadStatus: 'failed',
-          downloadError: downloadResult.error || 'All download attempts failed',
+          downloadError: failErr,
         },
       });
 
+      logger.warn(`Direct download failed for request ${requestId}; re-queued for search (${blocklist ? 'blocklisted release, falling through' : `transient — retry same source, attempt ${attemptNo}`})`);
+
       return {
         success: false,
-        message: 'Download failed',
+        reselected: true,
         requestId,
-        error: downloadResult.error,
+        blockedRelease: blocklist ? releaseName : undefined,
+        message: blocklist
+          ? 'Ebook release blocklisted and re-queued for search'
+          : 'Ebook download failed; re-queued for search',
       };
     }
 
@@ -291,7 +384,7 @@ async function downloadFileWithProgress(
   targetPath: string,
   tracking: ActiveDownload,
   logger: RMABLogger
-): Promise<boolean> {
+): Promise<DownloadOutcome> {
   try {
     // Ensure target directory exists with configured permissions
     const configService = getConfigService();
@@ -363,7 +456,7 @@ async function downloadFileWithProgress(
     return new Promise((resolve, reject) => {
       writer.on('finish', () => {
         tracking.completed = true;
-        resolve(true);
+        resolve({ ok: true });
       });
 
       writer.on('error', (error) => {
@@ -392,7 +485,10 @@ async function downloadFileWithProgress(
       // Ignore cleanup errors
     }
 
-    return false;
+    // Surface a non-2xx file status (axios rejects those before streaming) so the
+    // caller can tell a GONE file (404/410 → blocklist) from a transient failure.
+    const httpStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
+    return { ok: false, httpStatus };
   }
 }
 

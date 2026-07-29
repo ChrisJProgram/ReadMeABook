@@ -25,13 +25,22 @@ const libgenScraperMock = vi.hoisted(() => ({
   resolveLibgenDownloadUrl: vi.fn(),
 }));
 
+const blocklistServiceMock = vi.hoisted(() => ({
+  addAutoBlock: vi.fn(() => Promise.resolve({ created: true })),
+}));
+
 const fsMock = vi.hoisted(() => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn(),
   unlink: vi.fn().mockResolvedValue(undefined),
 }));
 
-const axiosMock = vi.hoisted(() => vi.fn());
+const axiosMock = vi.hoisted(() => {
+  const m = vi.fn() as ReturnType<typeof vi.fn> & { isAxiosError: (e: unknown) => boolean };
+  // Mirror axios.isAxiosError: the processor uses it to read .response.status.
+  m.isAxiosError = (e: unknown): boolean => Boolean(e && (e as { isAxiosError?: boolean }).isAxiosError);
+  return m;
+});
 
 const createWriteStreamMock = vi.hoisted(() => vi.fn());
 
@@ -50,6 +59,8 @@ vi.mock('@/lib/services/job-queue.service', () => ({
 vi.mock('@/lib/services/ebook-scraper', () => ebookScraperMock);
 
 vi.mock('@/lib/services/libgen-scraper', () => libgenScraperMock);
+
+vi.mock('@/lib/services/blocklist.service', () => blocklistServiceMock);
 
 vi.mock('fs/promises', () => ({
   default: fsMock,
@@ -196,7 +207,10 @@ describe('processStartDirectDownload', () => {
     );
   });
 
-  it('marks request as failed when all download attempts fail', async () => {
+  // F2(b) for direct sources — TRANSIENT failure (no URL resolved). Must NOT die
+  // in `failed` and must NOT blocklist a still-gettable release; flip to
+  // `awaiting_search` so retry-missing-torrents re-runs the ebook search.
+  it('re-queues to awaiting_search WITHOUT blocklisting when no URL resolves (transient)', async () => {
     prismaMock.request.update.mockResolvedValue({});
     prismaMock.downloadHistory.update.mockResolvedValue({});
     prismaMock.downloadHistory.findUnique.mockResolvedValue({
@@ -204,9 +218,13 @@ describe('processStartDirectDownload', () => {
         'https://slow1.example.com/book',
         'https://slow2.example.com/book',
       ]),
+      torrentHash: 'md5transient',
+      torrentName: 'Transient Book.epub',
     });
+    // First failure for this md5 — below the retry budget.
+    prismaMock.downloadHistory.count.mockResolvedValue(0);
 
-    // All extract attempts fail
+    // All resolve attempts return no URL (e.g. Libgen key-rotation blip).
     ebookScraperMock.extractDownloadUrl.mockResolvedValue(null);
 
     const { processStartDirectDownload } = await import('@/lib/processors/direct-download.processor');
@@ -220,18 +238,123 @@ describe('processStartDirectDownload', () => {
     });
 
     expect(result.success).toBe(false);
-    // Verify the second call (final failure status update)
+    expect(result.reselected).toBe(true);
+    // Re-searched, NOT failed.
     expect(prismaMock.request.update).toHaveBeenLastCalledWith({
       where: { id: 'req-3' },
       data: expect.objectContaining({
-        status: 'failed',
+        status: 'awaiting_search',
       }),
     });
+    // A transient failure must never blocklist a maybe-gettable release.
+    expect(blocklistServiceMock.addAutoBlock).not.toHaveBeenCalled();
     expect(prismaMock.downloadHistory.update).toHaveBeenLastCalledWith({
       where: { id: 'dh-3' },
       data: expect.objectContaining({
         downloadStatus: 'failed',
       }),
+    });
+  });
+
+  // F2(b) for direct sources — PERMANENT failure (the file itself 404s → gone).
+  // Blocklist this exact md5 (so F6's filterBlockedResults skips it on re-search
+  // and the source order falls through to the next edition, then MAM) and flip to
+  // `awaiting_search`.
+  it('blocklists the md5 and re-searches when the file 404s (permanent)', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+    prismaMock.downloadHistory.findUnique.mockResolvedValue({
+      torrentUrl: JSON.stringify(['https://libgen.bz/ads.php?md5=gonemd5']),
+      torrentHash: 'gonemd5',
+      torrentName: 'Gone Book - Author.epub',
+    });
+    // First failure — proves 404 blocklists on its own, independent of the budget.
+    prismaMock.downloadHistory.count.mockResolvedValue(0);
+
+    // A URL resolves, but the file fetch 404s (axios rejects non-2xx).
+    libgenScraperMock.resolveLibgenDownloadUrl.mockResolvedValue({
+      url: 'https://libgen.bz/get.php?md5=gonemd5&key=ROT',
+      format: 'epub',
+    });
+    axiosMock.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 404'), {
+        isAxiosError: true,
+        response: { status: 404 },
+      })
+    );
+
+    const { processStartDirectDownload } = await import('@/lib/processors/direct-download.processor');
+
+    const result = await processStartDirectDownload({
+      requestId: 'req-gone',
+      downloadHistoryId: 'dh-gone',
+      downloadUrl: 'https://libgen.bz/ads.php?md5=gonemd5',
+      targetFilename: 'Gone Book - Author.epub',
+      source: 'libgen',
+      format: 'epub',
+      jobId: 'job-gone',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reselected).toBe(true);
+    // The exact md5 is blocklisted so the re-search skips it and falls through.
+    expect(blocklistServiceMock.addAutoBlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'req-gone',
+        releaseHash: 'gonemd5',
+        source: 'download_fail',
+      })
+    );
+    expect(prismaMock.request.update).toHaveBeenLastCalledWith({
+      where: { id: 'req-gone' },
+      data: expect.objectContaining({
+        status: 'awaiting_search',
+      }),
+    });
+  });
+
+  // F2(b) budget — a NON-permanent failure (no 404, e.g. a persistently stalling
+  // CDN mirror) must still fall through once the release has burned the retry
+  // budget: blocklist the md5 so the re-search advances to the next edition / MAM
+  // instead of looping the same slow copy forever.
+  it('blocklists after the retry budget is exhausted even without a 404', async () => {
+    prismaMock.request.update.mockResolvedValue({});
+    prismaMock.downloadHistory.update.mockResolvedValue({});
+    prismaMock.downloadHistory.findUnique.mockResolvedValue({
+      torrentUrl: JSON.stringify(['https://libgen.bz/ads.php?md5=slowmd5']),
+      torrentHash: 'slowmd5',
+      torrentName: 'Slow Book - Author.epub',
+    });
+    // Two prior failures already recorded → this is the 3rd (budget = 3).
+    prismaMock.downloadHistory.count.mockResolvedValue(2);
+
+    // No URL resolves (transient-looking), but the budget is now spent.
+    libgenScraperMock.resolveLibgenDownloadUrl.mockResolvedValue(null);
+
+    const { processStartDirectDownload } = await import('@/lib/processors/direct-download.processor');
+
+    const result = await processStartDirectDownload({
+      requestId: 'req-slow',
+      downloadHistoryId: 'dh-slow',
+      downloadUrl: 'https://libgen.bz/ads.php?md5=slowmd5',
+      targetFilename: 'Slow Book - Author.epub',
+      source: 'libgen',
+      format: 'epub',
+      jobId: 'job-slow',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reselected).toBe(true);
+    expect(blocklistServiceMock.addAutoBlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: 'req-slow',
+        releaseHash: 'slowmd5',
+        source: 'download_fail',
+      })
+    );
+    expect(prismaMock.request.update).toHaveBeenLastCalledWith({
+      where: { id: 'req-slow' },
+      data: expect.objectContaining({ status: 'awaiting_search' }),
     });
   });
 
