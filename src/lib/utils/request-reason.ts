@@ -71,7 +71,7 @@ export function classifyAwaitingSearchReason(
       category: 'locked',
       label: 'Locked',
       tone: 'blocked',
-      hint: "A copy exists, but your account can't download it (e.g. it needs VIP). It won't arrive on its own — get access or use another source.",
+      hint: "A copy exists, but your account can't download it (e.g. it needs VIP status). It won't arrive on its own — get access or use another source.",
     };
   }
   if (m.includes('all blocked')) {
@@ -89,7 +89,7 @@ export function classifyAwaitingSearchReason(
       category: 'held',
       label: 'Held',
       tone: 'action',
-      hint: "Runtime is unknown, so quality can't be judged automatically. Pick a copy via interactive search.",
+      hint: "The book's length is unknown, so its quality can't be judged automatically. Pick a copy via interactive search.",
     };
   }
 
@@ -117,7 +117,7 @@ export function classifyAwaitingSearchReason(
       category: 'searching',
       label: 'Searching',
       tone: 'info',
-      hint: 'A copy failed to download; looking for a working alternative.',
+      hint: 'A copy failed to download; searching for a working alternative.',
     };
   }
 
@@ -132,7 +132,7 @@ export function classifyAwaitingSearchReason(
       category: 'not_found',
       label: 'Not Found',
       tone: 'waiting',
-      hint: 'No copy found on any source yet. It keeps re-checking on a schedule.',
+      hint: 'No copy found on any source yet. It re-checks automatically on a schedule.',
     };
   }
 
