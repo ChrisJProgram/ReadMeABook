@@ -1,3 +1,14 @@
+> **This is a fork** of [kikootwo/ReadMeABook](https://github.com/kikootwo/ReadMeABook) (AGPL-3.0).
+> It adds audiobook bitrate awareness (implied kbps, optional floor, post-import measured
+> actuals), strict indexer tiers, Libgen as a first-class ebook source with config-driven
+> source order, an ebook quality gate (page-scan detection), per-indexer release-exclusion
+> rules, download-failure learning, a MyAnonamouse account panel, scoped API tokens, and
+> assorted bug fixes (offered upstream individually). The complete Corresponding Source of
+> the running version is this repository — the in-app version badge links to the exact
+> deployed commit (AGPL §13).
+
+---
+
 <div align="center">
 
 ![RMAB_hero.png](screenshots/RMAB_hero.png)

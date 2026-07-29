@@ -68,4 +68,71 @@ describe('VersionBadge', () => {
     });
     expect(errorMock).toHaveBeenCalledWith('Failed to fetch version:', expect.any(Error));
   });
+
+  // Fork: the badge is the AGPL §13 Corresponding Source offer — it must link to
+  // the fork repository at the exact deployed commit, in every state. The update
+  // check stays on upstream (the fork cuts no releases, so "update available"
+  // means "upstream has moved past our base").
+  describe('fork source offer (AGPL §13)', () => {
+    it('links to the fork repo at the exact deployed commit', async () => {
+      process.env.NEXT_PUBLIC_APP_VERSION = '1.2.1';
+      process.env.NEXT_PUBLIC_GIT_COMMIT = '3e722cd48ed1bffb58f43de85f4fc328dd66c73b';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ json: async () => ({ version: '1.2.1' }) })
+      );
+
+      render(<VersionBadge />);
+
+      const link = await screen.findByRole('link');
+      expect(link).toHaveAttribute(
+        'href',
+        'https://github.com/ChrisJProgram/ReadMeABook/tree/3e722cd'
+      );
+    });
+
+    it('falls back to the fork repo root when no commit is known', async () => {
+      process.env.NEXT_PUBLIC_APP_VERSION = '1.2.1';
+      process.env.NEXT_PUBLIC_GIT_COMMIT = 'unknown';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ json: async () => ({ version: '1.2.1' }) })
+      );
+
+      render(<VersionBadge />);
+
+      const link = await screen.findByRole('link');
+      expect(link).toHaveAttribute('href', 'https://github.com/ChrisJProgram/ReadMeABook');
+    });
+
+    it('keeps the fork source link and upstream update-check even when an update exists', async () => {
+      process.env.NEXT_PUBLIC_APP_VERSION = '1.2.1';
+      process.env.NEXT_PUBLIC_GIT_COMMIT = '3e722cd48ed1bffb58f43de85f4fc328dd66c73b';
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue({ json: async () => ({ version: '9.9.9' }) });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<VersionBadge />);
+      await screen.findByRole('link');
+
+      await waitFor(() => {
+        const updateCheckUrls = fetchMock.mock.calls
+          .map((c) => String(c[0]))
+          .filter((u) => u.includes('raw.githubusercontent.com'));
+        expect(updateCheckUrls.length).toBeGreaterThan(0);
+        updateCheckUrls.forEach((u) => {
+          expect(u).toContain('kikootwo/ReadMeABook');
+          expect(u).not.toContain('ChrisJProgram');
+        });
+      });
+
+      // Even in the update-available state the badge must keep offering the
+      // fork's source, not upstream's release page.
+      expect(screen.getByRole('link')).toHaveAttribute(
+        'href',
+        'https://github.com/ChrisJProgram/ReadMeABook/tree/3e722cd'
+      );
+    });
+  });
 });

@@ -7,8 +7,12 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 
-const GITHUB_REPO = 'kikootwo/ReadMeABook';
-const REMOTE_PACKAGE_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/main/package.json`;
+// Two repos on purpose: the badge must link to THIS fork's source at the exact
+// deployed commit (AGPL §13 Corresponding Source offer), while the update check
+// keeps watching upstream, since the fork does not cut releases.
+const SOURCE_REPO = 'ChrisJProgram/ReadMeABook';
+const UPSTREAM_REPO = 'kikootwo/ReadMeABook';
+const REMOTE_PACKAGE_URL = `https://raw.githubusercontent.com/${UPSTREAM_REPO}/refs/heads/main/package.json`;
 const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 function compareVersions(current: string, latest: string): number {
@@ -91,9 +95,9 @@ export function VersionBadge() {
     return null;
   }
 
-  const releaseUrl = rawVersion && rawVersion !== 'unknown'
-    ? `https://github.com/${GITHUB_REPO}/releases/tag/v${rawVersion}`
-    : `https://github.com/${GITHUB_REPO}/releases`;
+  const sourceUrl = commit
+    ? `https://github.com/${SOURCE_REPO}/tree/${commit}`
+    : `https://github.com/${SOURCE_REPO}`;
 
   const tooltipText = updateAvailable && latestVersion
     ? `${version}${commit ? ` (${commit})` : ''} — Update available: v${latestVersion}`
@@ -101,10 +105,7 @@ export function VersionBadge() {
 
   return (
     <a
-      href={updateAvailable && latestVersion
-        ? `https://github.com/${GITHUB_REPO}/releases/tag/v${latestVersion}`
-        : releaseUrl
-      }
+      href={sourceUrl}
       target="_blank"
       rel="noopener noreferrer"
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gradient-to-r from-gray-100 to-gray-200 dark:from-gray-700 dark:to-gray-800 border border-gray-300 dark:border-gray-600 shadow-sm hover:shadow-md transition-shadow no-underline"
