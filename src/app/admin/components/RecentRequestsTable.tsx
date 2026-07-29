@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/Toast';
 import { AudiobookDetailsModal } from '@/components/audiobooks/AudiobookDetailsModal';
 import { BlockedReleasesChip } from './BlockedReleasesChip';
 import { usePausablePolling } from '@/lib/hooks/usePausablePolling';
+import { classifyAwaitingSearchReason, REASON_TONE_BADGE_CLASSES } from '@/lib/utils/request-reason';
 
 /** B6: auto-refresh cadence for the requests table (paused when hidden/interacting). */
 const REQUESTS_REFRESH_INTERVAL_MS = 10_000;
@@ -80,7 +81,24 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 type SortField = 'createdAt' | 'completedAt' | 'title' | 'user' | 'status';
 type SortOrder = 'asc' | 'desc';
 
-function getStatusBadge(status: string) {
+function getStatusBadge(status: string, errorMessage?: string | null) {
+  // awaiting_search → the same categorised reason as "My Requests" (Locked /
+  // Held / Low Quality / Not Found / Searching) so an admin sees WHY a request
+  // is parked, not a generic "Awaiting Search". Every other status is unchanged.
+  if (status === 'awaiting_search') {
+    const reason = classifyAwaitingSearchReason(errorMessage);
+    if (reason) {
+      return (
+        <span
+          title={reason.hint}
+          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${REASON_TONE_BADGE_CLASSES[reason.tone]}`}
+        >
+          {reason.label}
+        </span>
+      );
+    }
+  }
+
   const styles: Record<string, string> = {
     pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
     awaiting_approval: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
@@ -721,7 +739,7 @@ export function RecentRequestsTable({ ebookSidecarEnabled = false, annasArchiveB
                     <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                       {request.user}
                     </td>
-                    <td className="px-6 py-4">{getStatusBadge(request.status)}</td>
+                    <td className="px-6 py-4">{getStatusBadge(request.status, request.errorMessage)}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
                       {formatDistanceToNow(new Date(request.createdAt), { addSuffix: true })}
                     </td>

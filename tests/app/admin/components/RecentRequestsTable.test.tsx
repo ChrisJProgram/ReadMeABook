@@ -185,6 +185,40 @@ describe('RecentRequestsTable', () => {
     expect(statusBadge).toHaveTextContent('Pending');
   });
 
+  it('shows a categorised reason badge (Locked) for a VIP-gated awaiting_search request', () => {
+    useSWRMock.mockImplementation((url: string) => {
+      if (url.includes('/api/admin/requests')) {
+        return {
+          data: {
+            ...mockRequestsData,
+            requests: [
+              {
+                ...mockRequestsData.requests[0],
+                status: 'awaiting_search',
+                errorMessage: 'No usable releases — 2 candidate(s) matched an exclude rule',
+              },
+            ],
+          },
+          error: null,
+          isLoading: false,
+        };
+      }
+      if (url === '/api/admin/users') {
+        return { data: mockUsersData, error: null, isLoading: false };
+      }
+      return { data: null, error: null, isLoading: false };
+    });
+
+    render(<RecentRequestsTable />);
+
+    // The status cell now reads "Locked" (amber), not the generic label. (Note:
+    // "Awaiting Search" still legitimately exists as a filter-dropdown option.)
+    const badge = screen.getByText('Locked');
+    expect(badge).toBeInTheDocument();
+    expect(badge.className).toContain('bg-amber-100');
+    expect(badge.className).toContain('rounded-full');
+  });
+
   it('renders filter controls', () => {
     render(<RecentRequestsTable />);
 

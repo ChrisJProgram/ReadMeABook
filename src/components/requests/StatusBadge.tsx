@@ -9,7 +9,7 @@ import React from 'react';
 import { cn } from '@/lib/utils/cn';
 import {
   classifyAwaitingSearchReason,
-  type RequestReasonTone,
+  REASON_TONE_BADGE_CLASSES,
 } from '@/lib/utils/request-reason';
 
 interface StatusBadgeProps {
@@ -25,13 +25,6 @@ interface StatusBadgeProps {
   className?: string;
 }
 
-const REASON_TONE_COLOR: Record<RequestReasonTone, string> = {
-  blocked: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-  action: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
-  waiting: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  info: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-};
-
 export function StatusBadge({ status, progress, errorMessage, className }: StatusBadgeProps) {
   // Categorised reason for a parked request — Locked/Held/Not Found/etc. — so
   // "Awaiting Search" no longer hides why a request is stuck.
@@ -43,7 +36,7 @@ export function StatusBadge({ status, progress, errorMessage, className }: Statu
           title={reason.hint}
           className={cn(
             'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
-            REASON_TONE_COLOR[reason.tone],
+            REASON_TONE_BADGE_CLASSES[reason.tone],
             className
           )}
         >

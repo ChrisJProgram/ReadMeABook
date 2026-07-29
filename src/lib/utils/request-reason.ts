@@ -27,6 +27,19 @@ export type RequestReasonCategory =
 /** Drives the badge colour and communicates whether the user must act. */
 export type RequestReasonTone = 'blocked' | 'action' | 'waiting' | 'info';
 
+/**
+ * Canonical badge colour per tone, shared by every renderer of a reason badge
+ * (StatusBadge on "My Requests" and the admin RecentRequestsTable) so the two
+ * can't drift. Amber = needs attention / won't self-resolve; indigo = you must
+ * act; slate = waiting, no action; blue = actively working.
+ */
+export const REASON_TONE_BADGE_CLASSES: Record<RequestReasonTone, string> = {
+  blocked: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  action: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  waiting: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  info: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+};
+
 export interface RequestReason {
   category: RequestReasonCategory;
   /** Short badge label, e.g. "Locked". */
