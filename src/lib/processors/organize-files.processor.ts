@@ -21,6 +21,14 @@ import { getAudibleService } from '../integrations/audible.service';
 import { addAutoBlock } from '../services/blocklist.service';
 
 /**
+ * B7: base backoff for a retryable import failure. The delay scales with the
+ * attempt number (5 min, 10 min, 15 min…), which comfortably outlasts the rclone
+ * VFS dir-cache window that caused the original stuck request while still being
+ * far faster than the 6-hourly retry-failed-imports sweep.
+ */
+const IMPORT_RETRY_BASE_DELAY_MS = 5 * 60 * 1000;
+
+/**
  * Process organize files job
  * Moves completed downloads to media library in proper directory structure
  * Handles both audiobook and ebook request types with appropriate branching
@@ -468,12 +476,38 @@ export async function processOrganizeFiles(payload: OrganizeFilesPayload): Promi
           },
         });
 
+        // B7: actually SCHEDULE the retry. Previously the request was parked in
+        // awaiting_import and nothing was queued — recovery depended entirely on
+        // the 6-hourly retry-failed-imports sweep (and BullMQ's delayed set held
+        // only repeat:* entries). A transient fault (rclone VFS dir-cache race,
+        // mount not yet visible) therefore needed hours, or manual intervention.
+        // Backoff grows with attempts: 5 min, 10 min, 15 min…
+        const retryDelayMs = IMPORT_RETRY_BASE_DELAY_MS * newAttempts;
+        try {
+          const jobQueue = getJobQueueService();
+          await jobQueue.addOrganizeJob(
+            requestId,
+            audiobookId,
+            downloadPath,
+            undefined,
+            cleanupSource,
+            undefined,
+            retryDelayMs
+          );
+          logger.info(`Scheduled re-import in ${Math.round(retryDelayMs / 60000)} min (attempt ${newAttempts}/${currentRequest.maxImportRetries})`);
+        } catch (queueError) {
+          // Never fail the handler on a queue error — the 6-hourly sweep remains
+          // the safety net, exactly as before this change.
+          logger.warn(`Could not schedule delayed re-import (the 6-hourly sweep will retry): ${queueError instanceof Error ? queueError.message : String(queueError)}`);
+        }
+
         return {
           success: false,
           message: 'Retryable error detected, queued for re-import',
           requestId,
           attempts: newAttempts,
           maxRetries: currentRequest.maxImportRetries,
+          retryDelayMs,
         };
       } else {
         // Max retries exceeded - move to warn status

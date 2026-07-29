@@ -47,7 +47,8 @@ export async function processRetryFailedImports(payload: RetryFailedImportsPaylo
     };
 
     // Find all requests in awaiting_import status (both audiobook and ebook)
-    // The organize_files processor handles both types with type-based branching
+    // The organize_files processor handles both types with type-based branching.
+    // importAttempts/maxImportRetries feed B7's skip accounting (see recordSkip).
     const requests = await prisma.request.findMany({
       where: {
         status: 'awaiting_import',
@@ -79,14 +80,53 @@ export async function processRetryFailedImports(payload: RetryFailedImportsPaylo
     let triggered = 0;
     let skipped = 0;
 
+    /**
+     * B7: a skip used to be a silent dead-end — no attempt increment, no stored
+     * reason, only a log line. A request whose path could never be resolved sat in
+     * awaiting_import forever, invisible in the UI and never escalating. Now every
+     * skip records WHY on the request, and repeated skips consume the same
+     * importAttempts budget as real failures, so an unresolvable request lands in
+     * `warn` (surfaced, actionable) instead of parking indefinitely.
+     */
+    const recordSkip = async (
+      request: { id: string; importAttempts?: number | null; maxImportRetries?: number | null },
+      reason: string
+    ): Promise<void> => {
+      skipped++;
+      // Schema defaults are 0/5; tolerate nulls so a partial row can never write NaN.
+      const attempts = (request.importAttempts ?? 0) + 1;
+      const maxRetries = request.maxImportRetries ?? 5;
+      const exhausted = attempts >= maxRetries;
+      try {
+        await prisma.request.update({
+          where: { id: request.id },
+          data: {
+            ...(exhausted ? { status: 'warn' } : {}),
+            importAttempts: attempts,
+            lastImportAt: new Date(),
+            errorMessage: exhausted
+              ? `${reason}. Import retries exhausted (${attempts}/${maxRetries}) — manual retry available.`
+              : `${reason}. Retry ${attempts}/${maxRetries}`,
+            updatedAt: new Date(),
+          },
+        });
+      } catch (updateError) {
+        logger.error(
+          `Failed to record skip reason for request ${request.id}: ${updateError instanceof Error ? updateError.message : String(updateError)}`
+        );
+      }
+      logger[exhausted ? 'warn' : 'info'](
+        `Request ${request.id} skipped: ${reason} (attempt ${attempts}/${maxRetries}${exhausted ? ' — moved to warn' : ''})`
+      );
+    };
+
     for (const request of requests) {
       try {
         // Get the download path from the most recent download history
         const downloadHistory = request.downloadHistory[0];
 
         if (!downloadHistory) {
-          logger.warn(`No download history found for request ${request.id}, skipping`);
-          skipped++;
+          await recordSkip(request, 'No download history for this request');
           continue;
         }
 
@@ -107,8 +147,7 @@ export async function processRetryFailedImports(payload: RetryFailedImportsPaylo
 
           const protocol = CLIENT_PROTOCOL_MAP[clientType as DownloadClientType] as ProtocolType | undefined;
           if (!protocol) {
-            logger.warn(`Unknown download client type: ${clientType} for request ${request.id}, skipping`);
-            skipped++;
+            await recordSkip(request, `Unknown download client type "${clientType}"`);
             continue;
           }
 
@@ -146,7 +185,7 @@ export async function processRetryFailedImports(payload: RetryFailedImportsPaylo
 
         // Check if we got a valid path (getFallbackPath returns empty string on failure)
         if (!downloadPath) {
-          skipped++;
+          await recordSkip(request, 'Could not resolve a download path (client, stored path and fallback all failed)');
           continue;
         }
 
@@ -161,8 +200,9 @@ export async function processRetryFailedImports(payload: RetryFailedImportsPaylo
         // Spread DB operations over time to avoid connection pool exhaustion
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
-        logger.error(`Failed to trigger organize for request ${request.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        skipped++;
+        const detail = error instanceof Error ? error.message : 'Unknown error';
+        logger.error(`Failed to trigger organize for request ${request.id}: ${detail}`);
+        await recordSkip(request, `Could not queue the import job: ${detail}`);
       }
     }
 

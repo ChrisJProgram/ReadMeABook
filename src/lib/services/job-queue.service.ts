@@ -669,13 +669,20 @@ export class JobQueueService {
    * Add organize files job
    * Note: targetPath parameter is deprecated and unused (reads from database config instead)
    */
+  /**
+   * @param delayMs B7: delay before the organize job becomes runnable. Used by the
+   *   retryable-error path so a transient filesystem fault (an rclone VFS dir-cache
+   *   race, a mount not yet visible) self-heals in minutes instead of waiting for
+   *   the 6-hourly retry-failed-imports sweep.
+   */
   async addOrganizeJob(
     requestId: string,
     audiobookId: string,
     downloadPath: string,
     targetPath?: string,
     cleanupSource?: boolean,
-    selectedFiles?: string[]
+    selectedFiles?: string[],
+    delayMs?: number
   ): Promise<string> {
     return await this.addJob(
       'organize_files',
@@ -689,6 +696,7 @@ export class JobQueueService {
       } as OrganizeFilesPayload,
       {
         priority: 8,
+        ...(delayMs && delayMs > 0 ? { delay: delayMs } : {}),
       }
     );
   }

@@ -752,6 +752,76 @@ describe('processRetryFailedImports', () => {
     expect(result.skipped).toBe(1);
     expect(jobQueueMock.addOrganizeJob).not.toHaveBeenCalled();
   });
+
+  // ================= B7: skips must be visible and bounded =================
+
+  describe('B7: skip accounting', () => {
+    const unresolvableRequest = (over: Record<string, unknown> = {}) => ({
+      id: 'req-b7',
+      audiobook: { id: 'a-b7', title: 'Book' },
+      importAttempts: 0,
+      maxImportRetries: 5,
+      // no download history → unresolvable path, the classic silent-skip case
+      downloadHistory: [],
+      ...over,
+    });
+
+    it('records WHY a request was skipped instead of failing silently', async () => {
+      prismaMock.request.findMany.mockResolvedValue([unresolvableRequest()]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processRetryFailedImports } = await import('@/lib/processors/retry-failed-imports.processor');
+      const result = await processRetryFailedImports({ jobId: 'job-b7-1' });
+
+      expect(result.skipped).toBe(1);
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'req-b7' },
+          data: expect.objectContaining({
+            importAttempts: 1, // consumes the retry budget — can't park forever
+            errorMessage: expect.stringContaining('No download history'),
+          }),
+        })
+      );
+      // Not yet exhausted → stays awaiting_import (no status key written)
+      const data = prismaMock.request.update.mock.calls[0][0].data;
+      expect(data.status).toBeUndefined();
+    });
+
+    it('escalates to warn once the import retry budget is exhausted', async () => {
+      prismaMock.request.findMany.mockResolvedValue([
+        unresolvableRequest({ importAttempts: 4, maxImportRetries: 5 }),
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processRetryFailedImports } = await import('@/lib/processors/retry-failed-imports.processor');
+      await processRetryFailedImports({ jobId: 'job-b7-2' });
+
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'warn',
+            importAttempts: 5,
+            errorMessage: expect.stringContaining('retries exhausted'),
+          }),
+        })
+      );
+    });
+
+    it('a failed skip-record never breaks the sweep for other requests', async () => {
+      prismaMock.request.findMany.mockResolvedValue([
+        unresolvableRequest({ id: 'req-b7-a' }),
+        unresolvableRequest({ id: 'req-b7-b' }),
+      ]);
+      prismaMock.request.update.mockRejectedValue(new Error('db down'));
+
+      const { processRetryFailedImports } = await import('@/lib/processors/retry-failed-imports.processor');
+      const result = await processRetryFailedImports({ jobId: 'job-b7-3' });
+
+      expect(result.success).toBe(true);
+      expect(result.skipped).toBe(2); // both still counted
+    });
+  });
 });
 
 

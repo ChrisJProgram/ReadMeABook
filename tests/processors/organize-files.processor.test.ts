@@ -18,6 +18,7 @@ const inspectEpubQualityMock = vi.hoisted(() => vi.fn());
 const libraryServiceMock = vi.hoisted(() => ({ triggerLibraryScan: vi.fn() }));
 const jobQueueMock = vi.hoisted(() => ({
   addNotificationJob: vi.fn(() => Promise.resolve()),
+  addOrganizeJob: vi.fn(() => Promise.resolve('job-x')), // B7: delayed re-import
 }));
 const configMock = vi.hoisted(() => ({
   getBackendMode: vi.fn(),
@@ -738,6 +739,95 @@ describe('processOrganizeFiles', () => {
         }),
       })
     );
+  });
+
+  // ================= B7: transient import errors self-heal =================
+
+  describe('B7: retryable import errors schedule their own retry', () => {
+    const setupRetryable = (importAttempts: number, maxImportRetries = 5) => {
+      // findUnique serves both the initial type-detection read and (on the warn
+      // path) the notification read, which includes audiobook + user.
+      prismaMock.request.findUnique.mockResolvedValue({
+        id: 'req-b7',
+        type: 'audiobook',
+        user: { plexUsername: 'testuser' },
+        audiobook: { id: 'a-b7', title: 'Book', author: 'Author' },
+      });
+      prismaMock.audiobook.findUnique.mockResolvedValue({
+        id: 'a-b7',
+        title: 'Book',
+        author: 'Author',
+        audibleAsin: 'ASIN1',
+      });
+      // The organize step fails with a transient filesystem fault.
+      organizerMock.organize.mockRejectedValue(new Error("ENOENT: no such file or directory, stat '/downloads/Book'"));
+      prismaMock.request.findFirst.mockResolvedValue({ importAttempts, maxImportRetries });
+      prismaMock.request.update.mockResolvedValue({});
+      prismaMock.downloadHistory.findFirst.mockResolvedValue(null);
+      configMock.getBackendMode.mockResolvedValue('plex');
+      configMock.get.mockResolvedValue(null);
+    };
+
+    const run = async () => {
+      const { processOrganizeFiles } = await import('@/lib/processors/organize-files.processor');
+      return processOrganizeFiles({
+        requestId: 'req-b7',
+        audiobookId: 'a-b7',
+        downloadPath: '/downloads/Book',
+        jobId: 'job-b7',
+      });
+    };
+
+    it('queues a DELAYED organize job so a transient fault heals in minutes, not 6 hours', async () => {
+      setupRetryable(0);
+
+      const result = await run();
+
+      expect(result.success).toBe(false);
+      expect(result.attempts).toBe(1);
+      // 5 min * attempt 1
+      expect(result.retryDelayMs).toBe(5 * 60 * 1000);
+      expect(jobQueueMock.addOrganizeJob).toHaveBeenCalledWith(
+        'req-b7',
+        'a-b7',
+        '/downloads/Book',
+        undefined,
+        undefined,
+        undefined,
+        5 * 60 * 1000
+      );
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'awaiting_import' }) })
+      );
+    });
+
+    it('backs off further on later attempts', async () => {
+      setupRetryable(2);
+      const result = await run();
+      expect(result.retryDelayMs).toBe(15 * 60 * 1000); // attempt 3
+    });
+
+    it('a queue failure never fails the handler (the 6-hourly sweep stays the safety net)', async () => {
+      setupRetryable(0);
+      jobQueueMock.addOrganizeJob.mockRejectedValueOnce(new Error('redis down'));
+
+      const result = await run();
+
+      expect(result.success).toBe(false);
+      expect(result.attempts).toBe(1); // still parked for the sweep, no throw
+    });
+
+    it('does not schedule a retry once attempts are exhausted (goes to warn instead)', async () => {
+      setupRetryable(4, 5);
+      prismaMock.downloadHistory.findFirst.mockResolvedValue(null);
+
+      await run();
+
+      expect(jobQueueMock.addOrganizeJob).not.toHaveBeenCalled();
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'warn' }) })
+      );
+    });
   });
 
   // ================= F6: ebook quality gate =================
