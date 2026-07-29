@@ -368,6 +368,113 @@ describe('auth middleware', () => {
       }
     });
 
+    // ---------------- B8: token scopes ----------------
+
+    const apiTokenFixture = (scopes: string | null, role = 'admin') => ({
+      id: 'token-1',
+      tokenHash: testTokenHash,
+      role,
+      scopes,
+      expiresAt: null,
+      tokenUser: { id: 'user-1', plexUsername: 'activeuser', role, deletedAt: null },
+    });
+
+    it('B8: a read-only token is blocked from an allowlisted WRITE endpoint', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture('read'));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn();
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/requests', 'POST') as any,
+        handler
+      );
+      const payload = await response.json();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(response.status).toBe(403);
+      // Distinct from the allowlist rejection: tells the operator to widen the token
+      expect(payload.message).toMatch(/lacks the "write" scope/i);
+      expect(payload.requiredScope).toBe('write');
+    });
+
+    it('B8: a write token still cannot reach admin-scoped recovery endpoints', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture('read,write'));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn();
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/admin/jobs/job-1/trigger', 'POST') as any,
+        handler
+      );
+      const payload = await response.json();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(payload.requiredScope).toBe('admin');
+    });
+
+    it('B8: an admin-scoped token CAN trigger a scheduled job (the recovery path)', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture('read,write,admin'));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/admin/jobs/job-1/trigger', 'POST') as any,
+        handler
+      );
+
+      expect(handler).toHaveBeenCalled();
+      expect(response.status).toBe(200);
+    });
+
+    it('B8: a write-scoped token can override a release (B5 automation surface)', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture('read,write', 'user'));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/requests/req-1/select-torrent', 'POST') as any,
+        handler
+      );
+
+      expect(handler).toHaveBeenCalled();
+    });
+
+    it('B8: a legacy token (NULL scopes) keeps working exactly as before', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture(null));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/requests', 'POST') as any,
+        handler
+      );
+
+      expect(handler).toHaveBeenCalled();
+      expect(response.status).toBe(200);
+    });
+
+    it('B8: the allowlist still outranks scopes — admin scope cannot reach an unlisted route', async () => {
+      prismaMock.apiToken.findUnique.mockResolvedValue(apiTokenFixture('read,write,admin'));
+      prismaMock.apiToken.update.mockResolvedValue({});
+      const { requireAuth } = await import('@/lib/middleware/auth');
+
+      const handler = vi.fn();
+      const response = await requireAuth(
+        makeRequest(`Bearer ${testToken}`, '/api/admin/settings/ebook', 'PUT') as any,
+        handler
+      );
+      const payload = await response.json();
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(response.status).toBe(403);
+      expect(payload.message).toMatch(/not available via API token/i);
+    });
+
     it('does not restrict JWT-authenticated users to the allowlist', async () => {
       verifyAccessTokenMock.mockReturnValue({
         sub: 'user-1',

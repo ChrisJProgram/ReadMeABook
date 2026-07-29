@@ -564,6 +564,10 @@ model ApiToken {
   tokenHash   String    @unique @map("token_hash") // SHA-256 hash of the token (never store plaintext)
   tokenPrefix String    @map("token_prefix") // First 8 chars for display (e.g., "rmab_a1b2")
   role        String    @default("user") // Token role: 'admin' or 'user'
+  // B8: comma-separated scopes narrowing what this token may do within the
+  // endpoint allowlist ('read', 'write', 'admin'). NULL = legacy token, granted
+  // the pre-scopes behaviour (read + write) so existing integrations keep working.
+  scopes      String?   @db.Text
   createdById String    @map("created_by_id") // Who created the token (may differ from userId for admin-created tokens)
   userId      String    @map("user_id") // The user identity this token acts as
   lastUsedAt  DateTime? @map("last_used_at")

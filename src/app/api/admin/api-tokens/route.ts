@@ -8,7 +8,7 @@ import { requireAuth, requireAdmin, AuthenticatedRequest } from '@/lib/middlewar
 import { prisma } from '@/lib/db';
 import { RMABLogger } from '@/lib/utils/logger';
 import { checkApiTokenCreateRateLimit } from '@/lib/utils/rateLimit';
-import { MAX_TOKENS_PER_USER } from '@/lib/constants/api-tokens';
+import { MAX_TOKENS_PER_USER, API_TOKEN_SCOPES, serializeTokenScopes, parseTokenScopes } from '@/lib/constants/api-tokens';
 import { generateApiToken } from '@/lib/utils/api-token';
 import { z } from 'zod';
 
@@ -19,6 +19,9 @@ const CreateTokenSchema = z.object({
   expiresAt: z.string().datetime().nullable().optional(),
   userId: z.string().uuid().optional(), // Admin can specify which user the token acts as
   role: z.enum(['admin', 'user']).optional(), // Accepted for compatibility, but cannot differ from target user role
+  // B8: narrow what the token may do within the endpoint allowlist.
+  // Omitted → DEFAULT_TOKEN_SCOPES (read-only), the safe default for new tokens.
+  scopes: z.array(z.enum(API_TOKEN_SCOPES)).optional(),
 });
 
 /**
@@ -46,6 +49,7 @@ export async function GET(request: NextRequest) {
           name: t.name,
           tokenPrefix: t.tokenPrefix,
           role: t.role,
+          scopes: parseTokenScopes(t.scopes), // B8: NULL → legacy grant, surfaced explicitly
           createdBy: t.createdBy.plexUsername,
           createdById: t.createdBy.id,
           tokenUser: t.tokenUser.plexUsername,
@@ -88,7 +92,7 @@ export async function POST(request: NextRequest) {
         }
 
         const body = await req.json();
-        const { name, expiresAt, userId, role } = CreateTokenSchema.parse(body);
+        const { name, expiresAt, userId, role, scopes } = CreateTokenSchema.parse(body);
 
         // Determine target user (defaults to the admin themselves)
         const targetUserId = userId || req.user!.id;
@@ -144,12 +148,16 @@ export async function POST(request: NextRequest) {
         // Generate the token
         const { fullToken, tokenHash, tokenPrefix } = generateApiToken();
 
+        // B8: persist normalized scopes (invalid entries dropped; empty → read-only)
+        const tokenScopes = serializeTokenScopes(scopes);
+
         const apiToken = await prisma.apiToken.create({
           data: {
             name,
             tokenHash,
             tokenPrefix,
             role: tokenRole,
+            scopes: tokenScopes,
             createdById: req.user!.id,
             userId: targetUserId,
             expiresAt: expiresAt ? new Date(expiresAt) : null,
@@ -162,6 +170,7 @@ export async function POST(request: NextRequest) {
           createdBy: req.user!.username,
           targetUser: targetUser.plexUsername,
           role: tokenRole,
+          scopes: tokenScopes,
         });
 
         return NextResponse.json({
@@ -170,6 +179,7 @@ export async function POST(request: NextRequest) {
             name: apiToken.name,
             tokenPrefix: apiToken.tokenPrefix,
             role: apiToken.role,
+            scopes: parseTokenScopes(apiToken.scopes),
             expiresAt: apiToken.expiresAt,
             createdAt: apiToken.createdAt,
           },

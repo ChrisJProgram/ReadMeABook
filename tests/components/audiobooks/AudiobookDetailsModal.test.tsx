@@ -359,7 +359,20 @@ describe('AudiobookDetailsModal', () => {
       return modal.getAttribute('data-request-id') ?? '';
     };
 
-    it.each(['pending', 'failed', 'awaiting_search', 'awaiting_release'])(
+    it.each([
+      'pending',
+      'failed',
+      'awaiting_search',
+      'awaiting_release',
+      // B5: in-flight/stuck states — overriding these is the whole point of the
+      // manual search, and routing them here keeps the request (and its learned
+      // blocklist) instead of falling back to create-new.
+      'searching',
+      'downloading',
+      'processing',
+      'awaiting_import',
+      'warn',
+    ])(
       'forwards requestId when own user has an advanceable %s request',
       async (status) => {
         const forwarded = await openInteractiveAndReadForwardedRequestId({
@@ -372,7 +385,15 @@ describe('AudiobookDetailsModal', () => {
       }
     );
 
-    it.each(['awaiting_approval', 'searching', 'downloading', 'processing', 'denied'])(
+    it.each([
+      // select-torrent 403s awaiting_approval by design; terminal/cancelled states
+      // and unknown statuses correctly fall back to the create-new-request path.
+      'awaiting_approval',
+      'denied',
+      'available',
+      'downloaded',
+      'cancelled',
+    ])(
       'does NOT forward requestId when own status is %s (blocked / non-advanceable)',
       async (status) => {
         const forwarded = await openInteractiveAndReadForwardedRequestId({

@@ -8,7 +8,13 @@ import crypto from 'crypto';
 import { verifyAccessToken, TokenPayload } from '../utils/jwt';
 import { prisma } from '../db';
 import { RMABLogger } from '../utils/logger';
-import { API_TOKEN_PREFIX, isEndpointAllowed } from '../constants/api-tokens';
+import {
+  API_TOKEN_PREFIX,
+  isEndpointAllowed,
+  parseTokenScopes,
+  requiredScopeFor,
+  ApiTokenScope,
+} from '../constants/api-tokens';
 
 const logger = RMABLogger.create('Auth');
 
@@ -39,7 +45,9 @@ function extractToken(request: NextRequest): string | null {
  * Returns a synthetic TokenPayload if valid, null otherwise.
  * Updates lastUsedAt asynchronously.
  */
-async function authenticateApiToken(token: string): Promise<TokenPayload | null> {
+async function authenticateApiToken(
+  token: string
+): Promise<(TokenPayload & { scopes: ApiTokenScope[] }) | null> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
   const apiToken = await prisma.apiToken.findUnique({
@@ -58,6 +66,8 @@ async function authenticateApiToken(token: string): Promise<TokenPayload | null>
   });
 
   if (!apiToken) return null;
+  // B8: scopes travel with the authenticated principal so requireAuth can gate on them.
+  const tokenScopes = parseTokenScopes(apiToken.scopes);
 
   // Check expiration
   if (apiToken.expiresAt && apiToken.expiresAt < new Date()) {
@@ -92,6 +102,7 @@ async function authenticateApiToken(token: string): Promise<TokenPayload | null>
     plexId: user.plexId,
     username: user.plexUsername,
     role: apiToken.role,
+    scopes: tokenScopes,
   };
 }
 
@@ -142,6 +153,27 @@ export async function requireAuth(
         {
           error: 'Forbidden',
           message: 'This endpoint is not available via API token authentication',
+        },
+        { status: 403 }
+      );
+    }
+
+    // B8: the endpoint is allowlisted — does THIS token hold its scope?
+    // Distinct message from the allowlist rejection so an operator can tell
+    // "this token is too narrow" (mint a wider one) from "no token may do this".
+    const needed = requiredScopeFor(method, pathname);
+    if (needed && !apiUser.scopes.includes(needed)) {
+      logger.warn('API token lacks the required scope', {
+        method,
+        path: pathname,
+        required: needed,
+        granted: apiUser.scopes.join(','),
+      });
+      return NextResponse.json(
+        {
+          error: 'Forbidden',
+          message: `This API token lacks the "${needed}" scope required for this endpoint`,
+          requiredScope: needed,
         },
         { status: 403 }
       );

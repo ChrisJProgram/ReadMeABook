@@ -42,13 +42,23 @@ describe('isEndpointAllowed', () => {
     });
 
     it('rejects sibling sub-routes of /api/requests/:id', () => {
-      // The :id placeholder must match a SINGLE segment — anything deeper is excluded.
+      // The :id placeholder must match a SINGLE segment — anything deeper is
+      // excluded unless it has its own allowlist entry.
       expect(isEndpointAllowed('GET', '/api/requests/abc/select-torrent')).toBe(false);
       expect(isEndpointAllowed('GET', '/api/requests/abc/download-token')).toBe(false);
       expect(isEndpointAllowed('GET', '/api/requests/abc/interactive-search')).toBe(false);
       expect(isEndpointAllowed('GET', '/api/requests/abc/manual-search')).toBe(false);
       expect(isEndpointAllowed('GET', '/api/requests/abc/select-ebook')).toBe(false);
-      expect(isEndpointAllowed('POST', '/api/requests/abc/select-torrent')).toBe(false);
+      expect(isEndpointAllowed('POST', '/api/requests/abc/select-ebook')).toBe(false);
+      expect(isEndpointAllowed('POST', '/api/requests/abc/manual-search')).toBe(false);
+    });
+
+    it('B8: POST select-torrent IS allowlisted (deliberate recovery endpoint)', () => {
+      // Added with the `write` scope so automation can override a bad auto-pick.
+      // GET on the same path stays rejected — only the documented verb is open.
+      expect(isEndpointAllowed('POST', '/api/requests/abc/select-torrent')).toBe(true);
+      expect(isEndpointAllowed('POST', '/api/requests/abc/select-torrent', ['read'])).toBe(false);
+      expect(isEndpointAllowed('GET', '/api/requests/abc/select-torrent')).toBe(false);
     });
 
     it('rejects partial / extended paths', () => {
