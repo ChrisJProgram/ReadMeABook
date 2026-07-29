@@ -15,6 +15,10 @@ import { authenticatedFetcher, fetchWithAuth } from '@/lib/utils/api';
 import { useToast } from '@/components/ui/Toast';
 import { AudiobookDetailsModal } from '@/components/audiobooks/AudiobookDetailsModal';
 import { BlockedReleasesChip } from './BlockedReleasesChip';
+import { usePausablePolling } from '@/lib/hooks/usePausablePolling';
+
+/** B6: auto-refresh cadence for the requests table (paused when hidden/interacting). */
+const REQUESTS_REFRESH_INTERVAL_MS = 10_000;
 
 interface RecentRequest {
   requestId: string;
@@ -204,9 +208,17 @@ export function RecentRequestsTable({ ebookSidecarEnabled = false, annasArchiveB
   // Build API URL with current local filters
   const apiUrl = `/api/admin/requests?page=${page}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearch)}&status=${status}&userId=${userId}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
 
+  // B6: pause polling while the tab is hidden or a dialog is open. Refreshing a
+  // large table every 10s regardless kept the page permanently busy (it never
+  // reached an idle frame, which is what made rendering/scrolling flaky and
+  // Page.captureScreenshot time out) and re-rendered the rows underneath an open
+  // modal. Same pause-on-interact behaviour the logs page already has.
+  const isDialogOpen = showDeleteConfirm || viewDetailsAsin !== null;
+  const refreshInterval = usePausablePolling(REQUESTS_REFRESH_INTERVAL_MS, isDialogOpen);
+
   // Fetch requests with SWR
   const { data, error, isLoading } = useSWR<RequestsResponse>(apiUrl, authenticatedFetcher, {
-    refreshInterval: 10000,
+    refreshInterval,
     keepPreviousData: true, // Keep showing old data while fetching new data to prevent layout shifts
   });
 
