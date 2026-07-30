@@ -20,5 +20,6 @@ export const createJobQueueMock = () => ({
   addRetryFailedImportsJob: vi.fn(),
   addFindMissingEbooksJob: vi.fn(),
   addCleanupSeededTorrentsJob: vi.fn(),
+  addMamAutoVipJob: vi.fn().mockResolvedValue('mam-auto-vip-job'),
   addNotificationJob: vi.fn().mockResolvedValue(undefined),
 });

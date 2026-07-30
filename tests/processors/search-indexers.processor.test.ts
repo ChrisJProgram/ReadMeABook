@@ -415,6 +415,65 @@ describe('processSearchIndexers', () => {
       expect(result.success).toBe(true);
       expect(jobQueueMock.addDownloadJob).toHaveBeenCalledTimes(1);
     });
+
+    it('flags vipGated and nudges the auto-VIP job when the only candidates were [VIP]', async () => {
+      configMock.get.mockImplementation(async (key: string) => mamWithVipRule(key));
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        {
+          indexer: 'MAM', indexerId: 20, title: 'Jumpnauts - Author [M4B] [VIP]',
+          size: 50 * 1024 * 1024, seeders: 80, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:vip', guid: 'guid-vip-gate', format: 'M4B',
+        },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-vipgate', audiobook: { id: 'a-vipgate', title: 'Jumpnauts', author: 'Author' }, jobId: 'job-vipgate',
+      });
+
+      expect(result.success).toBe(false);
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'awaiting_search', vipGated: true }),
+        }),
+      );
+      // demand-driven auto-VIP is nudged immediately, not left to the hourly cron
+      expect(jobQueueMock.addMamAutoVipJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT flag vipGated or nudge for a non-VIP exclude rule', async () => {
+      configMock.get.mockImplementation(async (key: string) => {
+        if (key === 'prowlarr_indexers') {
+          return JSON.stringify([{ id: 20, name: 'MAM', protocol: 'torrent', priority: 10, categories: [3030] }]);
+        }
+        if (key === 'indexer_flag_config') {
+          return JSON.stringify([{ name: 'No CamRip', modifier: 0, action: 'exclude', pattern: 'CAMRIP', indexerId: 20 }]);
+        }
+        return null;
+      });
+      prowlarrMock.searchWithVariations.mockResolvedValue([
+        {
+          indexer: 'MAM', indexerId: 20, title: 'Jumpnauts - Author CAMRIP',
+          size: 50 * 1024 * 1024, seeders: 10, publishDate: new Date(),
+          downloadUrl: 'magnet:?xt=urn:btih:cam', guid: 'guid-cam', format: 'M4B',
+        },
+      ]);
+      prismaMock.request.update.mockResolvedValue({});
+
+      const { processSearchIndexers } = await import('@/lib/processors/search-indexers.processor');
+      const result = await processSearchIndexers({
+        requestId: 'req-nonvip', audiobook: { id: 'a-nonvip', title: 'Jumpnauts', author: 'Author' }, jobId: 'job-nonvip',
+      });
+
+      expect(result.success).toBe(false);
+      expect(prismaMock.request.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'awaiting_search', vipGated: false }),
+        }),
+      );
+      expect(jobQueueMock.addMamAutoVipJob).not.toHaveBeenCalled();
+    });
   });
 
   // ================= F0/F1: runtime resolution, hold, floor =================

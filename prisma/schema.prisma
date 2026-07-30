@@ -250,6 +250,7 @@ model Request {
   maxImportRetries Int       @default(5) @map("max_import_retries")
   ebookAutoRetryCount Int?   @map("ebook_auto_retry_count")
   lastSearchAt     DateTime? @map("last_search_at")
+  vipGated         Boolean   @default(false) @map("vip_gated") // F7 L3: set when a search parks this request because its only candidates were VIP-gated (MAM [VIP]); drives demand-triggered auto-VIP. Reset false at the start of every search.
   customSearchTerms String?  @map("custom_search_terms") @db.Text
   lastImportAt     DateTime? @map("last_import_at")
   createdAt        DateTime  @default(now()) @map("created_at")

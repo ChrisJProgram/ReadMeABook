@@ -34,6 +34,7 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       data: {
         status: 'searching',
         searchAttempts: { increment: 1 },
+        vipGated: false, // F7 L3: cleared each run; re-set below only if this search parks VIP-gated
         updatedAt: new Date(),
       },
     });
@@ -217,6 +218,11 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
       // post-blocklist set — it's the actionable, user-authored cause.
       const allExcluded = excluded.length > 0 && nonBlocked.length > 0;
       const allBlocked = !allExcluded && blockedCount > 0 && preBlocklistCount > 0;
+      // F7 L3: VIP-gated iff the exclude that emptied the set was a MAM [VIP] rule —
+      // the book can ONLY be fulfilled by acquiring VIP. Flag it so the demand-driven
+      // auto-VIP job knows there is genuine VIP demand (vs "book doesn't exist" or a
+      // different exclude rule).
+      const vipGated = allExcluded && excluded.some((m) => !!m.rule.pattern && /vip/i.test(m.rule.pattern));
       const errorMessage = allExcluded
         ? `No usable releases — ${excluded.length} candidate(s) matched an exclude rule`
         : allBlocked
@@ -230,10 +236,24 @@ export async function processSearchIndexers(payload: SearchIndexersPayload): Pro
         data: {
           status: 'awaiting_search',
           errorMessage,
+          vipGated,
           lastSearchAt: new Date(),
           updatedAt: new Date(),
         },
       });
+
+      // F7 L3: nudge the demand-driven auto-VIP job now instead of waiting up to an
+      // hour for its scheduled run. Best-effort — a queue failure must not fail the
+      // search. The job itself stays fully guarded (opt-in, dry-run, 24h cooldown,
+      // Power-User + affordability gates), so nudging a disabled job is a fast no-op.
+      if (vipGated) {
+        logger.info(`Request ${requestId} is VIP-gated (only [VIP] releases available) — nudging auto-VIP job`);
+        try {
+          await getJobQueueService().addMamAutoVipJob();
+        } catch (e) {
+          logger.debug(`Auto-VIP nudge failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
 
       return {
         success: false,

@@ -19,6 +19,7 @@
  */
 
 import { getConfigService } from '../services/config.service';
+import { prisma } from '../db';
 import {
   getMamAccountStatus,
   purchaseVip,
@@ -127,6 +128,7 @@ export interface MamAutoVipResult {
     | 'breaker-disabled'
     | 'status-unavailable'
     | 'already-vip'
+    | 'no-demand'
     | 'requires-power-user'
     | 'insufficient-points'
     | 'cooldown'
@@ -184,6 +186,20 @@ export async function processMamAutoVip(payload: MamAutoVipPayload): Promise<Mam
   if (status.vipActive) {
     return { success: true, action: 'already-vip' };
   }
+
+  // Gate 4.5 (demand): buy ONLY when a real request needs VIP — i.e. a request is
+  // parked in awaiting_search because its only candidates were MAM [VIP] releases
+  // (search-indexers sets `vipGated`). No such demand → no purchase, no matter how
+  // many points are available. One purchase covers ALL pending VIP demand (VIP is
+  // account-wide), so a presence check is the whole single-flight guard.
+  const vipDemand = await prisma.request.count({
+    where: { vipGated: true, status: 'awaiting_search' },
+  });
+  if (vipDemand === 0) {
+    logger.info('No VIP-gated request pending — auto-VIP purchase not needed');
+    return { success: true, action: 'no-demand' };
+  }
+  logger.info(`${vipDemand} VIP-gated request(s) pending — evaluating VIP purchase`);
 
   // Gate 5: the points path requires Power User exactly (store: "Requires rank of
   // Power user or VIP"). Anything else (User, Elite, staff, unknown) → not armable.

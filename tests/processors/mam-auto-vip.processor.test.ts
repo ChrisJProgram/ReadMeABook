@@ -23,6 +23,9 @@ vi.mock('@/lib/integrations/mam.service', async (importOriginal) => {
   };
 });
 
+const prismaMock = vi.hoisted(() => ({ request: { count: vi.fn() } }));
+vi.mock('@/lib/db', () => ({ prisma: prismaMock }));
+
 import { processMamAutoVip } from '@/lib/processors/mam-auto-vip.processor';
 
 const puStatus = (over: Record<string, unknown> = {}) => ({
@@ -49,6 +52,7 @@ const config = (over: Record<string, string | null> = {}) => {
 beforeEach(() => {
   vi.clearAllMocks();
   configMock.setMany.mockResolvedValue(undefined);
+  prismaMock.request.count.mockResolvedValue(1); // default: VIP demand present, so gates past 4.5 are exercised
 });
 
 describe('processMamAutoVip — gates', () => {
@@ -110,6 +114,26 @@ describe('processMamAutoVip — gates', () => {
     const rules = JSON.parse(write![0][0].value);
     expect(rules).toHaveLength(1);
     expect(rules[0]).toMatchObject({ action: 'exclude', indexerId: 5 });
+  });
+
+  it('no VIP-gated demand: no purchase even when Power User + funded + live-armed (demand gate)', async () => {
+    config({ mam_auto_vip_dry_run: 'false' }); // live-armed — only the demand gate stands between it and a spend
+    statusMock.mockResolvedValue(puStatus());
+    prismaMock.request.count.mockResolvedValue(0);
+    const r = await processMamAutoVip({});
+    expect(r.action).toBe('no-demand');
+    expect(purchaseMock).not.toHaveBeenCalled();
+    expect(prismaMock.request.count).toHaveBeenCalledWith({
+      where: { vipGated: true, status: 'awaiting_search' },
+    });
+  });
+
+  it('VIP-gated demand present: passes the demand gate and evaluates the purchase', async () => {
+    config(); // dry-run default → reaching dry_run proves it got past the demand gate
+    statusMock.mockResolvedValue(puStatus());
+    prismaMock.request.count.mockResolvedValue(2);
+    const r = await processMamAutoVip({});
+    expect(r.action).toBe('dry_run');
   });
 
   it('class below Power User: never purchases', async () => {
