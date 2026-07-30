@@ -275,9 +275,13 @@ export function MamAccountPanel() {
                 </span>
               </div>
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                Hourly job: while you are Power User and not VIP, buys {autoVip.durationWeeks} weeks of VIP
-                ({(autoVip.costPer4Weeks * autoVip.durationWeeks) / 4} points) whenever points stay above your{' '}
-                {autoVip.reservePoints}-point reserve. One attempt per 24 h; 3 failures disable it.
+                Demand-driven: buys VIP only when a book you&apos;ve requested can{' '}
+                <span className="font-medium">only</span> be fetched as a MAM [VIP] release —
+                and your class is Power User and not currently VIP. It then buys{' '}
+                {autoVip.durationWeeks} weeks ({(autoVip.costPer4Weeks * autoVip.durationWeeks) / 4} points)
+                as long as points are above the {autoVip.reservePoints}-point reserve. Runs the
+                moment such a request is parked, with an hourly backstop; one attempt per 24 h,
+                and 3 failures disable it.
                 While enabled, it also keeps the [VIP] exclude rule in sync automatically.
               </p>
               {!account.vipActive && !account.vipPossible && (
